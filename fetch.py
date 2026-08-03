@@ -1,0 +1,115 @@
+"""본문 수집: robots 확인 → 요청 간격 → 티스토리 셀렉터 → trafilatura 폴백."""
+import time
+from dataclasses import dataclass
+from urllib import robotparser
+from urllib.parse import urlparse
+
+import requests
+import trafilatura
+from bs4 import BeautifulSoup
+
+USER_AGENT = "FESTA-crawler/0.1 (festival lineup archive)"
+MIN_INTERVAL_SECONDS = 3.0
+TIMEOUT_SECONDS = 10
+MIN_BODY_CHARS = 100
+MAX_BODY_CHARS = 8000
+
+# 티스토리 스킨별 본문 컨테이너 후보 (순차 시도)
+BODY_SELECTORS = [
+    ".tt_article_useless_p_margin",
+    ".entry-content",
+    ".article_view",
+    ".contents_style",
+    "article",
+]
+
+_LAST_REQUEST: dict[str, float] = {}          # host -> monotonic ts
+_ROBOTS: dict[str, robotparser.RobotFileParser] = {}   # host -> parser
+
+
+@dataclass
+class FetchResult:
+    status: str                     # ok | fetch_failed | empty_body
+    body: str | None = None
+    poster_image_url: str | None = None
+    error: str | None = None
+
+
+def _respect_rate_limit(host: str) -> None:
+    last = _LAST_REQUEST.get(host)
+    now = time.monotonic()
+    if last is not None and now - last < MIN_INTERVAL_SECONDS:
+        time.sleep(MIN_INTERVAL_SECONDS - (now - last))
+    _LAST_REQUEST[host] = time.monotonic()
+
+
+def _robots_allowed(url: str) -> bool:
+    host = urlparse(url).netloc
+    if host not in _ROBOTS:
+        rp = robotparser.RobotFileParser()
+        rp.set_url(f"https://{host}/robots.txt")
+        try:
+            rp.read()
+        except OSError:
+            # robots.txt 접근 불가 → 보수적으로 허용 (차단 명시가 없는 것)
+            _ROBOTS[host] = None
+        else:
+            _ROBOTS[host] = rp
+    rp = _ROBOTS[host]
+    return True if rp is None else rp.can_fetch(USER_AGENT, url)
+
+
+def parse_html(html: str) -> tuple[str | None, str | None]:
+    """(본문 텍스트 or None, og:image URL or None). 본문 100자 미만이면 None."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    og = None
+    meta = soup.find("meta", property="og:image")
+    if meta and meta.get("content"):
+        og = meta["content"].strip()
+
+    body = None
+    for selector in BODY_SELECTORS:
+        node = soup.select_one(selector)
+        if node:
+            text = node.get_text(separator="\n", strip=True)
+            if len(text) >= MIN_BODY_CHARS:
+                body = text
+                break
+
+    if body is None:
+        extracted = trafilatura.extract(html)
+        if extracted and len(extracted) >= MIN_BODY_CHARS:
+            body = extracted
+
+    if body is not None:
+        body = body[:MAX_BODY_CHARS]
+    return body, og
+
+
+def fetch_body(url: str) -> FetchResult:
+    if not _robots_allowed(url):
+        return FetchResult(status="fetch_failed", error="robots_disallowed")
+
+    host = urlparse(url).netloc
+    html = None
+    last_error = None
+    for _ in range(2):  # 최초 1회 + 재시도 1회
+        _respect_rate_limit(host)
+        try:
+            resp = requests.get(
+                url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS
+            )
+            resp.raise_for_status()
+            html = resp.text
+            break
+        except requests.RequestException as e:
+            last_error = str(e)
+
+    if html is None:
+        return FetchResult(status="fetch_failed", error=last_error)
+
+    body, og = parse_html(html)
+    if body is None:
+        return FetchResult(status="empty_body", poster_image_url=og)
+    return FetchResult(status="ok", body=body, poster_image_url=og)
