@@ -46,15 +46,20 @@ def _respect_rate_limit(host: str) -> None:
 def _robots_allowed(url: str) -> bool:
     host = urlparse(url).netloc
     if host not in _ROBOTS:
-        rp = robotparser.RobotFileParser()
-        rp.set_url(f"https://{host}/robots.txt")
         try:
-            rp.read()
-        except OSError:
-            # robots.txt 접근 불가 → 보수적으로 허용 (차단 명시가 없는 것)
+            resp = requests.get(
+                f"https://{host}/robots.txt",
+                headers={"User-Agent": USER_AGENT},
+                timeout=TIMEOUT_SECONDS,
+            )
+            if resp.status_code >= 400:
+                _ROBOTS[host] = None          # robots.txt 없음/접근불가 → 명시 차단 없음으로 간주
+            else:
+                rp = robotparser.RobotFileParser()
+                rp.parse(resp.text.splitlines())
+                _ROBOTS[host] = rp
+        except requests.RequestException:
             _ROBOTS[host] = None
-        else:
-            _ROBOTS[host] = rp
     rp = _ROBOTS[host]
     return True if rp is None else rp.can_fetch(USER_AGENT, url)
 
