@@ -52,7 +52,10 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
     raw_dir.mkdir(parents=True, exist_ok=True)
     cache_path = raw_dir / f"{row.university}.json"
     if cache_path.exists():
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached.get("url") == row.url:
+            return cached
+        # URL이 바뀌었으면 캐시 무시하고 다시 처리 (아래에서 덮어씀)
 
     record = {
         "university": row.university, "campus": row.campus,
@@ -73,7 +76,8 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
                 record["extraction"] = result.model_dump()
                 record["flag"] = "ok" if verify(result, row.university, row.year) else "mismatch"
 
-    cache_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+    if row.url is not None:
+        cache_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return record
 
 

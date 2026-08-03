@@ -105,3 +105,22 @@ def test_write_csv_utf8_bom(tmp_path):
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["a"] == "한글"
+
+
+def test_process_row_no_url_writes_no_cache(tmp_path):
+    record = process_row(_row(url=None), tmp_path)
+    assert record["flag"] == "no_source"
+    assert not (tmp_path / "raw" / "연세대학교.json").exists()
+
+
+def test_process_row_refetches_when_cached_url_differs(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    stale = {"university": "연세대학교", "campus": "신촌캠퍼스",
+             "region": "서울 서대문구", "year": 2026, "url": None,
+             "flag": "no_source", "poster_image_url": None, "extraction": None}
+    (raw_dir / "연세대학교.json").write_text(json.dumps(stale), "utf-8")
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y: _extraction())
+    record = process_row(_row(), tmp_path)
+    assert record["flag"] == "ok"          # 스테일 캐시 무시하고 재처리
