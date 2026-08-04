@@ -104,3 +104,30 @@ def test_discover_keeps_lookalike_domain(monkeypatch):
     payload = '{"candidates": [{"url": "https://notnamu.wiki/article"}]}'
     monkeypatch.setattr(discover, "call_claude", lambda p, timeout=120, tools="": payload)
     assert discover.discover("한양대학교", 2026) == ["https://notnamu.wiki/article"]
+
+
+def test_discover_blocks_instagram_and_youtube(monkeypatch):
+    payload = """{"candidates": [
+      {"url": "https://www.instagram.com/hyu_festival/"},
+      {"url": "https://instagram.com/p/ABC123/"},
+      {"url": "https://m.youtube.com/watch?v=xyz"},
+      {"url": "https://youtu.be/xyz"},
+      {"url": "https://www.newshyu.com/news/articleView.html?idxno=1"}
+    ]}"""
+    monkeypatch.setattr(discover, "call_claude", lambda p, timeout=120, tools="": payload)
+    assert discover.discover("한양대학교", 2026) == [
+        "https://www.newshyu.com/news/articleView.html?idxno=1"
+    ]
+
+
+def test_discover_prompt_tells_llm_to_skip_unreadable_sources(monkeypatch):
+    captured = {}
+
+    def fake(prompt, timeout=120, tools=""):
+        captured["prompt"] = prompt
+        return '{"candidates": []}'
+
+    monkeypatch.setattr(discover, "call_claude", fake)
+    discover.discover("한양대학교", 2026)
+    assert "인스타그램" in captured["prompt"]
+    assert "유튜브" in captured["prompt"]
