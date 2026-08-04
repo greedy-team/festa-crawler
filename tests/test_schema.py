@@ -71,3 +71,22 @@ def test_extraction_result_instagram_handle_optional():
          "instagram_handle": "hyu_festival"}
     )
     assert new.instagram_handle == "hyu_festival"
+
+
+def test_discover_result_parse():
+    from schema import DiscoverResult
+
+    r = DiscoverResult.model_validate(
+        {"candidates": [
+            {"url": "https://example.com/a", "title": "한양대 축제"},
+            {"url": "https://example.com/b"},
+        ]}
+    )
+    assert r.candidates[0].url == "https://example.com/a"
+    assert r.candidates[1].title is None
+
+
+def test_discover_result_empty_default():
+    from schema import DiscoverResult
+
+    assert DiscoverResult.model_validate({}).candidates == []

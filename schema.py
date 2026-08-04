@@ -36,3 +36,12 @@ class ArtistMaster(BaseModel):
 class EnrichResult(BaseModel):
     mapping: dict[str, str]
     artists: list[ArtistMaster]
+
+
+class Candidate(BaseModel):
+    url: str
+    title: str | None = None
+
+
+class DiscoverResult(BaseModel):
+    candidates: list[Candidate] = Field(default_factory=list)

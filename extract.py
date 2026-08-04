@@ -43,11 +43,17 @@ class ExtractError(Exception):
     pass
 
 
-def call_claude(prompt: str, timeout: int = CLAUDE_TIMEOUT_SECONDS) -> str:
-    """claude -p 헤드리스 호출. envelope JSON의 result 필드(모델 응답 텍스트)를 반환."""
+def call_claude(
+    prompt: str, timeout: int = CLAUDE_TIMEOUT_SECONDS, tools: str = ""
+) -> str:
+    """claude -p 헤드리스 호출. envelope JSON의 result 필드(모델 응답 텍스트)를 반환.
+
+    tools: --tools에 그대로 전달. 기본 ""는 모든 도구 차단(추출·정규화용).
+           탐색만 "WebSearch"로 켠다.
+    """
     try:
         proc = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "json", "--tools", ""],
+            ["claude", "-p", prompt, "--output-format", "json", "--tools", tools],
             capture_output=True, text=True, timeout=timeout,
         )
     except FileNotFoundError:
