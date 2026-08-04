@@ -56,3 +56,38 @@ def test_robots_disallowed_returns_fetch_failed(monkeypatch):
     result = fetch.fetch_body("https://blocked.example.com/entry/festival")
     assert result.status == "fetch_failed"
     assert result.error == "robots_disallowed"
+
+
+def test_instagram_candidates_extracts_handles_excludes_paths():
+    html = read("tistory_sample.html")
+    assert fetch.instagram_candidates(html) == ["hyu_festival"]   # /p/... 경로는 제외
+
+
+def test_instagram_candidates_dedup_and_lowercase():
+    html = (
+        '<a href="https://instagram.com/HYU_Festival/">1</a>'
+        '<a href="https://www.instagram.com/hyu_festival?igsh=x">2</a>'
+        '<a href="https://instagram.com/explore/">3</a>'
+    )
+    assert fetch.instagram_candidates(html) == ["hyu_festival"]
+
+
+def test_instagram_candidates_empty_when_none():
+    assert fetch.instagram_candidates("<html><body>없음</body></html>") == []
+
+
+def test_instagram_candidates_excludes_embed_script():
+    html = (
+        '<script async src="//www.instagram.com/embed.js"></script>'
+        '<a href="https://www.instagram.com/hyu_festival/">계정</a>'
+    )
+    assert fetch.instagram_candidates(html) == ["hyu_festival"]
+
+
+def test_instagram_candidates_rejects_lookalike_domain():
+    assert fetch.instagram_candidates('<a href="https://notinstagram.com/evil">x</a>') == []
+
+
+def test_instagram_candidates_keeps_dotted_handles():
+    html = '<a href="https://www.instagram.com/smu.festival/">상명대</a>'
+    assert fetch.instagram_candidates(html) == ["smu.festival"]

@@ -1,6 +1,7 @@
 """본문 수집: robots 확인 → 요청 간격 → 티스토리 셀렉터 → trafilatura 폴백."""
+import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib import robotparser
 from urllib.parse import urlparse
 
@@ -23,6 +24,10 @@ BODY_SELECTORS = [
     "article",
 ]
 
+_IG_HANDLE = re.compile(r"(?:^|[/.\"'\s])(?:www\.)?instagram\.com/([A-Za-z0-9_.]{2,30})")
+_IG_NON_HANDLES = {"p", "reel", "reels", "explore", "accounts", "stories", "share"}
+_IG_FILE_SUFFIXES = ("js", "css", "json", "png", "jpg", "jpeg", "gif", "svg", "ico", "html")
+
 _LAST_REQUEST: dict[str, float] = {}          # host -> monotonic ts
 _ROBOTS: dict[str, robotparser.RobotFileParser] = {}   # host -> parser
 
@@ -33,6 +38,7 @@ class FetchResult:
     body: str | None = None
     poster_image_url: str | None = None
     error: str | None = None
+    instagram_candidates: list[str] = field(default_factory=list)
 
 
 def _respect_rate_limit(host: str) -> None:
@@ -92,6 +98,19 @@ def parse_html(html: str) -> tuple[str | None, str | None]:
     return body, og
 
 
+def instagram_candidates(html: str) -> list[str]:
+    """HTML에서 인스타그램 계정 핸들 후보를 등장순·중복제거로 추출한다."""
+    found: list[str] = []
+    for match in _IG_HANDLE.finditer(html):
+        handle = match.group(1).lower().rstrip(".")
+        if handle.rsplit(".", 1)[-1] in _IG_FILE_SUFFIXES:
+            continue          # embed.js, static.css 등 파일명은 핸들이 아니다
+        if handle in _IG_NON_HANDLES or handle in found:
+            continue
+        found.append(handle)
+    return found
+
+
 def fetch_body(url: str) -> FetchResult:
     if not _robots_allowed(url):
         return FetchResult(status="fetch_failed", error="robots_disallowed")
@@ -115,6 +134,7 @@ def fetch_body(url: str) -> FetchResult:
         return FetchResult(status="fetch_failed", error=last_error)
 
     body, og = parse_html(html)
+    candidates = instagram_candidates(html)
     if body is None:
-        return FetchResult(status="empty_body", poster_image_url=og)
-    return FetchResult(status="ok", body=body, poster_image_url=og)
+        return FetchResult(status="empty_body", poster_image_url=og, instagram_candidates=candidates)
+    return FetchResult(status="ok", body=body, poster_image_url=og, instagram_candidates=candidates)

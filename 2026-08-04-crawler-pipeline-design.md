@@ -2,6 +2,7 @@
 
 - 날짜: 2026-08-04
 - 상태: 승인됨 (사용자 확정)
+- 개정: 2026-08-04 — 인스타그램 총학 계정 핸들 수집 추가 (이슈 #1)
 - 근거 문서: `crawler/데이터 파이프라인 v1.md`, `crawler/서울 상위 대학 29개.md`, FESTA UI 목업 5종
 
 ## 1. 목적
@@ -21,6 +22,8 @@
 - 아티스트 표기 정규화 + 아티스트 마스터 생성 (LLM 지식 기반, 후처리 1콜)
 - 대학 시드 데이터 (캠퍼스·지역, 29행, 1회 생성)
 - 재실행 캐시 (동일 URL 재호출 차단)
+- 인스타그램 총학 계정 핸들 수집 (하이브리드: fetch가 HTML에서 후보 수집, LLM이 문맥 판별 —
+  실측 기준 21곳 중 15곳에 총학 계정 링크 존재. 기존 21건은 캐시 초기화 후 전체 재실행으로 백필)
 
 ### 제외 (이번 범위 아님)
 
@@ -29,7 +32,10 @@
 - DB 적재 / 백엔드·어드민 연동 — 운영자 수동 입력
 - 파생 데이터 집계 (자주 온 아티스트, 예정 공연, D-day) — 백엔드 소관
 - 아티스트 프로필·포스터 **이미지** 수급 — 사실이 아닌 저작물이라 크롤링 부적합.
-  포스터 원본 URL만 기록하고 이미지 정책은 별도 결정
+  포스터 원본 URL만 기록하고 이미지 정책은 별도 결정.
+  (2026-08 확인: Instagram oEmbed는 2026-06-15부터 토큰·App Review 없이 호출 가능함을 실증했으나,
+  게시물 URL 필요·프로필 임베드 불가. 실측 결과 블로그 21곳 모두 계정 링크만 있고 게시물 URL은 0건이라
+  임베드는 크롤러가 아니라 프론트엔드 소관이며, 게시물 URL은 운영자가 어드민에서 수동 확보하는 경로가 현실적)
 - 나무위키 크롤링 — robots.txt상 문서 페이지는 허용되나 CC BY-NC-SA(비영리) 라이선스와
   Cloudflare 봇 방어 문제, 그리고 필요 데이터가 LLM 지식 + 위키백과 API로 충분해 사용하지 않음
 - 공지사항·분실물·오시는 길 — 운영자 직접 입력 영역
@@ -43,6 +49,7 @@
 | 스키마 보장 | JSON 강제 프롬프트 + pydantic 검증 + 실패 시 1회 재시도 | CLI에는 API의 도구 호출 강제가 없음. 20~400건 규모 + 사람 검토가 백스톱이라 실질 차이 없음 |
 | 산출물 | CSV 3종 (festivals / lineup / artists) | 목업의 데이터 요구(축제 상세, 아티스트 메타, 정규화된 표기)를 반영 |
 | 아티스트 메타데이터 | LLM 지식으로 생성 + 사람 검수, 애매한 것만 위키백과 API 확인 | 시즌당 유니크 아티스트 ~50–150명, 전부 유명인. 크롤링 불필요 |
+| 인스타 핸들 수집 방식 | 하이브리드 — fetch가 HTML href에서 후보 정규식 수집, LLM이 본문 문맥으로 총학 계정만 판별 | 실측: 한양대는 핸들이 href에만 있어 LLM 단독으론 누락, 연세대는 정규식 단독으론 블로그 운영사 계정 오탐 |
 
 참고 비용(문서화 목적): API 전환 시 시즌 400회 기준 Haiku ~$5, Sonnet ~$14, Opus ~$23 수준.
 
@@ -54,6 +61,7 @@ crawler/
 │                        #   (URL 없는 행은 수집 스킵, 시드로만 사용)
 ├── crawl.py             # 엔트리: 목록 순회, 캐시 확인, 진행 로그, CSV 출력
 ├── fetch.py             # 본문 수집: robots.txt 확인 → 티스토리 셀렉터 순차 시도 → trafilatura 폴백
+│                        #   + og:image·인스타그램 링크 후보 채집 (HTML 메타/href, 추가 요청 없음)
 ├── extract.py           # LLM 추출: claude -p 호출 + pydantic 검증 + 1회 재시도 (유일한 LLM 접점)
 ├── enrich.py            # 후처리: 유니크 아티스트 정규화 + 마스터 생성 (LLM 1콜)
 ├── schema.py            # pydantic 모델
@@ -75,10 +83,13 @@ URL 1건당:
 3. **요청 간격** — 동일 호스트 요청 사이 최소 3초 대기
 4. **본문 수집** — 티스토리 공통 본문 셀렉터 순차 시도 → 실패 시 trafilatura 폴백
    → 둘 다 실패 또는 본문 100자 미만이면(포스터 이미지만 있는 글) `empty_body` 기록.
-   이때 HTML `og:image` 메타태그를 `poster_image_url`로 함께 채집 (LLM 추출과 무관한 fetch 단계 작업)
+   이때 HTML `og:image` 메타태그를 `poster_image_url`로, `instagram.com` 링크들을
+   `instagram_candidates`로 함께 채집 (LLM 추출과 무관한 fetch 단계 작업)
 5. **절단** — 본문 8,000자 상한
-6. **추출** — `claude -p`에 본문+스키마 프롬프트 → JSON 파싱 → pydantic 검증
-   → 실패 시 1회 재시도, 그래도 실패면 `extract_failed` 기록
+6. **추출** — `claude -p`에 본문+스키마 프롬프트(+ 인스타 후보 목록) → JSON 파싱 → pydantic 검증
+   → 실패 시 1회 재시도, 그래도 실패면 `extract_failed` 기록.
+   인스타 후보는 "이 대학의 축제·총학생회 계정만 채택, 블로그 운영자·무관 계정은 null" 규칙으로 판별.
+   `empty_body` 행은 추출이 돌지 않으므로 핸들도 null (미검증 후보를 CSV에 싣지 않는다)
 7. **역방향 검증** — 추출 결과의 `found` / `university` / `year`가 입력과 불일치하면 `mismatch` 플래그
 8. **저장** — `output/raw/`에 JSON 원본 저장
 
@@ -103,6 +114,7 @@ end_date: str | null
 venue_name: str | null       # 예: 신촌캠퍼스 노천극장
 outsider_admission: str | null   # 원문 표현 그대로 (예: "외부인 입장 가능", "재학생만")
 ticket_info: str | null      # 유료/무료, 예매 일정 등 원문 요약
+instagram_handle: str | null # 이 대학 축제·총학생회 인스타 계정 (후보+본문 문맥 판별, 확신 없으면 null)
 lineup: [
   { artist_raw: str          # 원문 표기 그대로
     day_label: str | null    # 원문 표기 (1일차, DAY1 …)
@@ -116,7 +128,7 @@ lineup: [
 
 ### festivals.csv — 1행 = 축제
 
-`university | campus | region | year | festival_name | start_date | end_date | venue_name | outsider_admission | ticket_info | poster_image_url | source_url | flag`
+`university | campus | region | year | festival_name | start_date | end_date | venue_name | outsider_admission | ticket_info | instagram_handle | poster_image_url | source_url | flag`
 
 `flag` ∈ `ok | fetch_failed | empty_body | extract_failed | mismatch | no_source`
 
@@ -134,10 +146,10 @@ lineup: [
 
 - 호출: `claude -p <prompt> --output-format json` 서브프로세스, 호출당 타임아웃 120초
 - 모델: Claude Code 세션 기본 모델 사용 (별도 지정 안 함)
-- 프롬프트: 스키마 + "JSON만 출력" + 환각 억제 규칙 + 본문
+- 프롬프트: 스키마 + "JSON만 출력" + 환각 억제 규칙 + 인스타 후보 목록(있을 때) + 본문
 - 검증: 응답에서 JSON 추출 → pydantic 파싱. 실패 시 오류 내용을 덧붙여 1회 재시도
-- API 전환 시: `extract()` 내부의 subprocess 호출을 Anthropic SDK 호출(도구 호출 강제)로 교체.
-  시그니처(`본문 → 검증된 모델`) 불변
+- API 전환 시: `call_claude()` 내부의 subprocess 호출을 Anthropic SDK 호출(도구 호출 강제)로 교체.
+  `extract()` 시그니처(`본문·대학·연도·인스타 후보 → 검증된 모델`) 불변
 
 ## 8. 준수 사항 (파이프라인 문서 2.3)
 

@@ -22,6 +22,7 @@ def _extraction() -> ExtractionResult:
         "festival_name": "아카라카", "start_date": "2026-05-21",
         "end_date": "2026-05-23", "venue_name": "노천극장",
         "outsider_admission": "사전 예매 시 가능", "ticket_info": "유료",
+        "instagram_handle": "hyu_festival",
         "lineup": [
             {"artist_raw": "잔나비", "day_label": "1일차", "date": "2026-05-21"},
             {"artist_raw": "시크릿", "is_secret": True},
@@ -38,7 +39,7 @@ def test_process_row_no_url(tmp_path):
 def test_process_row_happy_path_writes_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
         status="ok", body="본문" * 100, poster_image_url="https://example.com/p.jpg"))
-    monkeypatch.setattr(crawl, "extract", lambda body, u, y: _extraction())
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "ok"
     assert record["poster_image_url"] == "https://example.com/p.jpg"
@@ -66,7 +67,7 @@ def test_process_row_uses_cache(tmp_path, monkeypatch):
 def test_process_row_mismatch_flag(tmp_path, monkeypatch):
     wrong = _extraction().model_copy(update={"year": 2024})
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
-    monkeypatch.setattr(crawl, "extract", lambda body, u, y: wrong)
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: wrong)
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "mismatch"
     assert record["extraction"] is not None   # 결과는 보존, 판단은 사람이
@@ -80,7 +81,7 @@ def test_process_row_refetches_when_cached_year_differs(tmp_path, monkeypatch):
              "flag": "ok", "poster_image_url": None, "extraction": _extraction().model_dump()}
     (raw_dir / "연세대학교.json").write_text(json.dumps(stale), "utf-8")
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
-    monkeypatch.setattr(crawl, "extract", lambda body, u, y: _extraction())
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
     record = process_row(_row(), tmp_path)   # _row()의 year는 2026
     assert record["year"] == 2026
 
@@ -168,6 +169,31 @@ def test_process_row_refetches_when_cached_url_differs(tmp_path, monkeypatch):
              "flag": "no_source", "poster_image_url": None, "extraction": None}
     (raw_dir / "연세대학교.json").write_text(json.dumps(stale), "utf-8")
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
-    monkeypatch.setattr(crawl, "extract", lambda body, u, y: _extraction())
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "ok"          # 스테일 캐시 무시하고 재처리
+
+
+def test_process_row_passes_candidates_to_extract(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100, instagram_candidates=["hyu_festival"]))
+
+    def fake_extract(body, u, y, cands=None):
+        captured["cands"] = cands
+        return _extraction()
+
+    monkeypatch.setattr(crawl, "extract", fake_extract)
+    process_row(_row(), tmp_path)
+    assert captured["cands"] == ["hyu_festival"]
+
+
+def test_build_festival_row_includes_instagram_handle():
+    record = {"university": "한양대학교", "campus": "서울캠퍼스",
+              "region": "서울 성동구", "year": 2026,
+              "url": "https://example.com/post", "flag": "ok",
+              "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    frow = build_festival_row(record)
+    assert frow["instagram_handle"] == "hyu_festival"
+    assert list(frow.keys()) == crawl.FESTIVAL_FIELDS   # 컬럼 순서 일치

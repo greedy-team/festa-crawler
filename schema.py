@@ -20,6 +20,7 @@ class ExtractionResult(BaseModel):
     venue_name: str | None = None
     outsider_admission: str | None = None
     ticket_info: str | None = None
+    instagram_handle: str | None = None
     lineup: list[LineupItem] = Field(default_factory=list)
 
 
