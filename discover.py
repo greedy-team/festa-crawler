@@ -16,9 +16,10 @@ DISCOVER_TIMEOUT_SECONDS = 300   # 실측 63초 + 검색 왕복 여유
 MAX_CANDIDATES = 3
 
 # robots·라이선스상 쓸 수 없는 곳. 검색 결과에 섞여 나오므로 여기서 뺀다.
+# 서브도메인도 함께 막는다 (m.search.naver.com 등).
 BLOCKED_DOMAINS = frozenset({
     "namu.wiki",            # CC BY-NC-SA(비영리) + Cloudflare 봇 방어
-    "www.google.com", "google.com", "search.naver.com",   # 검색 결과 페이지 자체
+    "google.com", "search.naver.com",   # 검색 결과 페이지 자체
 })
 
 PROMPT_TEMPLATE = """'{university}'의 {year}년 대학 축제 라인업을 다룬 웹 문서를 검색해서,
@@ -36,7 +37,8 @@ PROMPT_TEMPLATE = """'{university}'의 {year}년 대학 축제 라인업을 다�
 
 
 def _is_blocked(url: str) -> bool:
-    return urlparse(url).netloc.lower() in BLOCKED_DOMAINS
+    host = urlparse(url).netloc.lower().rsplit("@", 1)[-1].split(":")[0]
+    return any(host == d or host.endswith("." + d) for d in BLOCKED_DOMAINS)
 
 
 def discover(university: str, year: int) -> list[str]:

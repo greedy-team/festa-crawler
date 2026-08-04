@@ -86,3 +86,21 @@ def test_discover_cached_returns_empty_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(discover, "call_claude", boom)
     assert discover.discover_cached("한양대학교", 2026, tmp_path) == []
     assert not (tmp_path / "discovered" / "한양대학교.json").exists()   # 실패는 캐시 안 함
+
+
+def test_discover_blocks_subdomains_and_ports(monkeypatch):
+    payload = """{"candidates": [
+      {"url": "https://m.search.naver.com/search.naver?query=x"},
+      {"url": "https://namu.wiki:443/w/test"},
+      {"url": "https://www.google.com/search?q=x"},
+      {"url": "https://blog.example.com/ok"}
+    ]}"""
+    monkeypatch.setattr(discover, "call_claude", lambda p, timeout=120, tools="": payload)
+    assert discover.discover("한양대학교", 2026) == ["https://blog.example.com/ok"]
+
+
+def test_discover_keeps_lookalike_domain(monkeypatch):
+    # 접미사 규칙이 과하게 잡지 않는지 — notnamu.wiki는 namu.wiki가 아니다
+    payload = '{"candidates": [{"url": "https://notnamu.wiki/article"}]}'
+    monkeypatch.setattr(discover, "call_claude", lambda p, timeout=120, tools="": payload)
+    assert discover.discover("한양대학교", 2026) == ["https://notnamu.wiki/article"]
