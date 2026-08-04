@@ -41,7 +41,7 @@ def call_claude(prompt: str, timeout: int = CLAUDE_TIMEOUT_SECONDS) -> str:
     """claude -p 헤드리스 호출. envelope JSON의 result 필드(모델 응답 텍스트)를 반환."""
     try:
         proc = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "json"],
+            ["claude", "-p", prompt, "--output-format", "json", "--tools", ""],
             capture_output=True, text=True, timeout=timeout,
         )
     except FileNotFoundError:
@@ -85,6 +85,8 @@ def extract(body: str, university: str, year: int) -> ExtractionResult:
 def verify(result: ExtractionResult, university: str, year: int) -> bool:
     """역방향 검증: 추출 결과가 요청한 대학·연도의 글이 맞는지 사후 판정."""
     if not result.found:
+        return False
+    if not result.university_name:
         return False
     name_match = (
         result.university_name in university or university in result.university_name

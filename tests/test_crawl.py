@@ -143,6 +143,23 @@ def test_process_row_no_url_writes_no_cache(tmp_path):
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
 
 
+def test_write_csv_sanitizes_formula_prefix(tmp_path):
+    path = tmp_path / "out.csv"
+    write_csv(path, ["a", "b"], [{"a": "=SUM(A1)", "b": "@잔나비"}])
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["a"] == "'=SUM(A1)"
+    assert rows[0]["b"] == "'@잔나비"
+
+
+def test_process_row_fetch_failed_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "fetch_body",
+                        lambda url: FetchResult(status="fetch_failed", error="timeout"))
+    record = process_row(_row(), tmp_path)
+    assert record["flag"] == "fetch_failed"
+    assert not (tmp_path / "raw" / "연세대학교.json").exists()
+
+
 def test_process_row_refetches_when_cached_url_differs(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()

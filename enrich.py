@@ -7,13 +7,13 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from crawl import LINEUP_FIELDS, write_csv
-from extract import ExtractError, call_claude
+from extract import ExtractError, _extract_json, call_claude
 from schema import EnrichResult
 
 ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
                  "aliases", "needs_review"]
 
-ENRICH_TIMEOUT_SECONDS = 600  # 대량 배치(수백 명) 정규화는 추출 1건보다 오래 걸린다
+ENRICH_TIMEOUT_SECONDS = 900  # 실측 578초(대량 배치 정규화) + 여유
 
 PROMPT_TEMPLATE = """다음은 대학 축제 라인업에서 추출한 아티스트 표기 목록입니다.
 당신이 아는 지식으로 각 표기를 정식 활동명으로 정규화하고, 아티스트 마스터 정보를 만드세요.
@@ -52,9 +52,8 @@ def normalize(names: list[str]) -> EnrichResult:
     last_error = None
     for attempt in range(2):
         raw = call_claude(prompt, timeout=ENRICH_TIMEOUT_SECONDS)
-        start, end = raw.find("{"), raw.rfind("}")
         try:
-            return EnrichResult.model_validate_json(raw[start : end + 1])
+            return EnrichResult.model_validate_json(_extract_json(raw))
         except (ValidationError, ValueError) as e:
             last_error = e
             prompt += f"\n\n[재시도] 이전 응답이 유효하지 않았습니다: {e}\nJSON만 다시 출력하세요."

@@ -64,3 +64,4 @@ def test_verify_fails_on_mismatch():
     assert verify(_result(found=False), "연세대학교", 2026) is False
     assert verify(_result(university_name="고려대학교"), "연세대학교", 2026) is False
     assert verify(_result(year=2025), "연세대학교", 2026) is False
+    assert verify(_result(university_name=""), "연세대학교", 2026) is False

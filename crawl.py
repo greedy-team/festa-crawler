@@ -1,4 +1,4 @@
-"""FESTA 크롤러 엔트리포인트. Task 5에서 오케스트레이션이 추가된다."""
+"""FESTA 크롤러 엔트리포인트: 대학 목록 순회 → 수집·추출 → 캐시 → CSV 출력."""
 import argparse
 import csv
 import json
@@ -79,7 +79,7 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
                 record["extraction"] = result.model_dump()
                 record["flag"] = "ok" if verify(result, row.university, row.year) else "mismatch"
 
-    if row.url is not None:
+    if row.url is not None and record["flag"] != "fetch_failed":
         cache_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return record
 
@@ -121,11 +121,21 @@ def build_lineup_rows(record: dict) -> list[dict]:
     return rows
 
 
+def _sanitize_cell(value) -> str:
+    """Excel 수식 인젝션 방지: 위험 선행문자는 작은따옴표로 무력화."""
+    text = "" if value is None else str(value)
+    if text[:1] in ("=", "+", "-", "@"):
+        return "'" + text
+    return text
+
+
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(
+            [{k: _sanitize_cell(v) for k, v in row.items()} for row in rows]
+        )
 
 
 def run(input_csv: Path, out_dir: Path, limit: int | None = None) -> None:
