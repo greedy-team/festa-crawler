@@ -38,7 +38,7 @@ def load_universities(path: Path) -> list[UniversityRow]:
 FESTIVAL_FIELDS = [
     "university", "campus", "region", "year", "festival_name",
     "start_date", "end_date", "venue_name", "outsider_admission",
-    "ticket_info", "poster_image_url", "source_url", "flag",
+    "ticket_info", "instagram_handle", "poster_image_url", "source_url", "flag",
 ]
 LINEUP_FIELDS = [
     "university", "year", "festival_name", "day_label", "date", "time",
@@ -72,7 +72,7 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
             record["flag"] = fr.status
         else:
             try:
-                result = extract(fr.body, row.university, row.year)
+                result = extract(fr.body, row.university, row.year, fr.instagram_candidates)
             except ExtractError:
                 record["flag"] = "extract_failed"
             else:
@@ -95,6 +95,7 @@ def build_festival_row(record: dict) -> dict:
         "venue_name": ext.get("venue_name") or "",
         "outsider_admission": ext.get("outsider_admission") or "",
         "ticket_info": ext.get("ticket_info") or "",
+        "instagram_handle": ext.get("instagram_handle") or "",
         "poster_image_url": record["poster_image_url"] or "",
         "source_url": record["url"] or "",
         "flag": record["flag"],
