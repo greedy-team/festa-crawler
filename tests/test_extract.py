@@ -90,3 +90,24 @@ def test_extract_without_candidates_prompts_none(monkeypatch):
     monkeypatch.setattr(extract, "call_claude", fake)
     extract.extract("본문", "연세대학교", 2026)
     assert "후보 없음" in captured["prompt"]
+
+
+def test_call_claude_passes_tools_flag(monkeypatch):
+    captured = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = '{"result": "OK"}'
+        stderr = ""
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        return FakeProc()
+
+    monkeypatch.setattr(extract.subprocess, "run", fake_run)
+
+    extract.call_claude("프롬프트")
+    assert captured["argv"][-2:] == ["--tools", ""]      # 기본값은 도구 차단
+
+    extract.call_claude("프롬프트", tools="WebSearch")
+    assert captured["argv"][-2:] == ["--tools", "WebSearch"]

@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from discover import MAX_CANDIDATES, discover_cached
 from extract import ExtractError, extract, verify
 from fetch import fetch_body
 
@@ -38,7 +39,8 @@ def load_universities(path: Path) -> list[UniversityRow]:
 FESTIVAL_FIELDS = [
     "university", "campus", "region", "year", "festival_name",
     "start_date", "end_date", "venue_name", "outsider_admission",
-    "ticket_info", "instagram_handle", "poster_image_url", "source_url", "flag",
+    "ticket_info", "instagram_handle", "poster_image_url", "source_url",
+    "discovery", "flag",
 ]
 LINEUP_FIELDS = [
     "university", "year", "festival_name", "day_label", "date", "time",
@@ -46,40 +48,65 @@ LINEUP_FIELDS = [
 ]
 
 
+def _attempt_url(url: str, row: UniversityRow) -> dict:
+    """URL 1건을 수집·추출·검증한다. flag/poster_image_url/extraction만 담아 돌려준다."""
+    fr = fetch_body(url)
+    attempt = {"flag": fr.status, "poster_image_url": fr.poster_image_url, "extraction": None}
+    if fr.status != "ok":
+        return attempt
+    try:
+        result = extract(fr.body, row.university, row.year, fr.instagram_candidates)
+    except ExtractError:
+        attempt["flag"] = "extract_failed"
+        return attempt
+    attempt["extraction"] = result.model_dump()
+    attempt["flag"] = "ok" if verify(result, row.university, row.year) else "mismatch"
+    return attempt
+
+
 def process_row(row: UniversityRow, out_dir: Path) -> dict:
-    """URL 1건 처리. output/raw/<대학명>.json 캐시가 있으면 그대로 반환."""
+    """대학 1곳 처리. 수동 URL 우선, 실패하면 검색 후보로 폴백."""
     raw_dir = out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     cache_path = raw_dir / f"{row.university}.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached.get("url") == row.url and cached.get("year") == row.year:
+        if cached.get("seed_url") == row.url and cached.get("year") == row.year:
             # 시드 전용 필드는 현재 행 기준으로 갱신 (추출 결과에는 영향 없음)
             cached["campus"] = row.campus
             cached["region"] = row.region
             return cached
-        # URL 또는 연도가 바뀌었으면 캐시 무시하고 다시 처리 (아래에서 덮어씀)
+        # 시드 URL 또는 연도가 바뀌었으면 캐시 무시하고 다시 처리 (아래에서 덮어씀)
 
     record = {
         "university": row.university, "campus": row.campus,
-        "region": row.region, "year": row.year, "url": row.url,
+        "region": row.region, "year": row.year,
+        "seed_url": row.url, "url": row.url, "discovery": "",
         "flag": "no_source", "poster_image_url": None, "extraction": None,
     }
-    if row.url is not None:
-        fr = fetch_body(row.url)
-        record["poster_image_url"] = fr.poster_image_url
-        if fr.status != "ok":
-            record["flag"] = fr.status
-        else:
-            try:
-                result = extract(fr.body, row.university, row.year, fr.instagram_candidates)
-            except ExtractError:
-                record["flag"] = "extract_failed"
-            else:
-                record["extraction"] = result.model_dump()
-                record["flag"] = "ok" if verify(result, row.university, row.year) else "mismatch"
 
-    if row.url is not None and record["flag"] != "fetch_failed":
+    if row.url is not None:
+        record.update(_attempt_url(row.url, row))
+        record["discovery"] = "manual" if record["flag"] == "ok" else ""
+
+    if record["flag"] != "ok":
+        candidates = discover_cached(row.university, row.year, out_dir)
+        if candidates is None:
+            # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
+            return record
+        for candidate in candidates[:MAX_CANDIDATES]:
+            attempt = _attempt_url(candidate, row)
+            if attempt["flag"] == "ok":
+                record.update(attempt)
+                record["url"] = candidate
+                record["discovery"] = "search"
+                break
+        else:
+            # 어느 후보도 verify를 통과하지 못함
+            if row.url is None:
+                record["flag"] = "no_candidate"
+
+    if record["flag"] not in ("fetch_failed", "extract_failed"):
         cache_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return record
 
@@ -98,6 +125,7 @@ def build_festival_row(record: dict) -> dict:
         "instagram_handle": ext.get("instagram_handle") or "",
         "poster_image_url": record["poster_image_url"] or "",
         "source_url": record["url"] or "",
+        "discovery": record.get("discovery", ""),
         "flag": record["flag"],
     }
 
