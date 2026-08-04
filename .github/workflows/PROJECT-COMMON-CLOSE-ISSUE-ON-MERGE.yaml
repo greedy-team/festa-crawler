@@ -1,0 +1,88 @@
+# ===================================================
+# PROJECT-COMMON-CLOSE-ISSUE-ON-MERGE
+# ===================================================
+#
+# 작업 브랜치 → develop PR이 머지되면 해당 이슈를 닫습니다.
+#
+# 이슈 번호는 **브랜치명**에서 뽑습니다: `타입_이슈번호_슬러그`
+#   fix_31_로그인_시_500_에러  →  31
+#
+# 왜 브랜치명인가:
+#   GitHub의 `Closes #N`은 이 워크플로우에서 동작하지 않습니다. 작업 PR은
+#   develop으로 머지되는데 closing keyword는 기본 브랜치(main) 머지에서만
+#   동작하고, 릴리스 PR 본문은 RELEASE-CHANGELOG가 CHANGELOG로 덮어씁니다.
+#   브랜치명은 봇이 제안하는 값이라 사람이 덮어쓸 일이 없습니다.
+#
+# 브랜치명이 규칙에 안 맞으면 아무것도 하지 않고 통과합니다 —
+# 이슈 종료 실패가 머지를 막을 이유는 없습니다.
+# ===================================================
+
+name: PROJECT-COMMON-CLOSE-ISSUE-ON-MERGE
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [develop]
+
+permissions:
+  issues: write
+
+jobs:
+  close-issue:
+    name: 이슈 종료
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 브랜치명에서 이슈 번호 추출 후 종료
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+
+          NUM=$(printf '%s' "$HEAD_REF" \
+            | grep -oE '^(feat|fix|refactor|chore|docs)_[0-9]+_' \
+            | grep -oE '[0-9]+' || true)
+
+          if [ -z "$NUM" ]; then
+            echo "ℹ️ 브랜치명이 '타입_이슈번호_슬러그' 형식이 아님: $HEAD_REF"
+            echo "   → 종료할 이슈 없음, 통과합니다"
+            exit 0
+          fi
+
+          echo "📌 브랜치 '$HEAD_REF' → 이슈 #$NUM"
+
+          STATE=$(gh issue view "$NUM" --json state --jq .state 2>/dev/null || echo "")
+          if [ -z "$STATE" ]; then
+            echo "⚠️ 이슈 #$NUM 을 찾을 수 없습니다 (삭제됐거나 번호 불일치) → 통과"
+            exit 0
+          fi
+          if [ "$STATE" = "CLOSED" ]; then
+            echo "ℹ️ 이슈 #$NUM 은 이미 닫혀 있습니다 → 라벨만 정리"
+          fi
+
+          # 라벨 교체는 실패해도 종료를 막지 않는다 (라벨이 없는 이슈도 있다)
+          gh issue edit "$NUM" \
+            --add-label "작업완료" \
+            --remove-label "작업전" \
+            --remove-label "작업중" \
+            --remove-label "담당자확인" \
+            --remove-label "피드백" || echo "⚠️ 라벨 교체 일부 실패 — 계속 진행"
+
+          if [ "$STATE" != "CLOSED" ]; then
+            gh issue close "$NUM" \
+              --comment "PR #${PR_NUMBER} 머지로 완료되었습니다. ${PR_URL}"
+            echo "✅ 이슈 #$NUM 종료"
+          fi
+
+          {
+            echo "## ✅ 이슈 자동 종료"
+            echo ""
+            echo "- 브랜치: \`$HEAD_REF\`"
+            echo "- 이슈: #$NUM"
+            echo "- PR: #$PR_NUMBER"
+          } >> "$GITHUB_STEP_SUMMARY"

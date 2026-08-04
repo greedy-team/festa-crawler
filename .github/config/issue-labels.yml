@@ -1,0 +1,59 @@
+# ── 타입 라벨 (브랜치명 자동 생성의 기준) ────────────────────────────
+# 라벨 이름의 `type: ` 뒤 값이 그대로 브랜치 접두사가 된다 (예: type: fix → fix_118_...).
+# .github/scripts/issue_helper.py의 BRANCH_TYPES와 값이 일치해야 한다.
+- name: "type: feat"
+  color: 0E8A16
+  description: 기능 추가·개선 → feat_ 브랜치
+
+- name: "type: fix"
+  color: D73A4A
+  description: 버그 수정 → fix_ 브랜치
+
+- name: "type: refactor"
+  color: 8250DF
+  description: 동작 변경 없는 구조 개선 → refactor_ 브랜치
+
+- name: "type: chore"
+  color: 6E7781
+  description: 설정·빌드·의존성 등 → chore_ 브랜치
+
+- name: "type: docs"
+  color: 0969DA
+  description: 문서 작성·수정 → docs_ 브랜치
+
+# ── 상태·기타 라벨 ──────────────────────────────────────────────
+- name: 긴급
+  color: d73a4a
+  description: 긴급한 작업
+
+- name: 문서
+  color: "000000"
+  description: 문서 작업 관련
+
+- name: 작업전
+  color: E3F2FD
+  description: 작업 시작 전 준비 상태
+
+- name: 작업중
+  color: 74D7CB
+  description: 작업이 진행 중인 상태
+
+- name: 담당자확인
+  color: FBC61E
+  description: 담당자 확인 필요, 대기중 상태 (확인 후 '작업완료' or '피드백')
+
+- name: 피드백
+  color: A439D6
+  description: 담당자 확인 후 수정 필요
+
+- name: 작업완료
+  color: 0A4ABB
+  description: 작업 완료 상태인 경우 (이슈 폐쇄)
+
+- name: 보류
+  color: 9E9E9E
+  description: 작업 일시 중단 상태
+
+- name: 취소
+  color: f28b25
+  description: 작업 취소됨
