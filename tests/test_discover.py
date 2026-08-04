@@ -79,12 +79,12 @@ def test_discover_cached_refetches_on_year_change(tmp_path, monkeypatch):
     assert urls
 
 
-def test_discover_cached_returns_empty_on_failure(tmp_path, monkeypatch):
+def test_discover_cached_returns_none_on_failure(tmp_path, monkeypatch):
     def boom(prompt, timeout=120, tools=""):
         raise ExtractError("세션 한도")
 
     monkeypatch.setattr(discover, "call_claude", boom)
-    assert discover.discover_cached("한양대학교", 2026, tmp_path) == []
+    assert discover.discover_cached("한양대학교", 2026, tmp_path) is None
     assert not (tmp_path / "discovered" / "한양대학교.json").exists()   # 실패는 캐시 안 함
 
 

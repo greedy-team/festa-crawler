@@ -52,8 +52,12 @@ def discover(university: str, year: int) -> list[str]:
     return [c.url for c in result.candidates if not _is_blocked(c.url)]
 
 
-def discover_cached(university: str, year: int, out_dir: Path) -> list[str]:
-    """탐색 결과 캐시 래퍼. 탐색 1건이 60초 이상 걸려 캐시가 필수다."""
+def discover_cached(university: str, year: int, out_dir: Path) -> list[str] | None:
+    """탐색 결과 캐시 래퍼. 탐색 1건이 60초 이상 걸려 캐시가 필수다.
+
+    반환값: 후보 목록(정당한 0건이면 빈 리스트), 탐색 자체가 실패했으면 None.
+    None은 "이 결과를 캐시하지 말고 다음 실행에서 다시 시도하라"는 신호다.
+    """
     cache_dir = out_dir / "discovered"
     cache_path = cache_dir / f"{university}.json"
     if cache_path.exists():
@@ -65,7 +69,7 @@ def discover_cached(university: str, year: int, out_dir: Path) -> list[str]:
         urls = discover(university, year)
     except ExtractError as e:
         print(f"  탐색 실패: {e}", flush=True)
-        return []
+        return None
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(

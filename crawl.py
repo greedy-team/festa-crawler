@@ -90,7 +90,11 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
         record["discovery"] = "manual" if record["flag"] == "ok" else ""
 
     if record["flag"] != "ok":
-        for candidate in discover_cached(row.university, row.year, out_dir)[:MAX_CANDIDATES]:
+        candidates = discover_cached(row.university, row.year, out_dir)
+        if candidates is None:
+            # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
+            return record
+        for candidate in candidates[:MAX_CANDIDATES]:
             attempt = _attempt_url(candidate, row)
             if attempt["flag"] == "ok":
                 record.update(attempt)
@@ -98,6 +102,7 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
                 record["discovery"] = "search"
                 break
         else:
+            # 어느 후보도 verify를 통과하지 못함
             if row.url is None:
                 record["flag"] = "no_candidate"
 

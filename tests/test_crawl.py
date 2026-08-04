@@ -5,6 +5,7 @@ from pathlib import Path
 import crawl
 from crawl import (UniversityRow, build_festival_row, build_lineup_rows,
                    process_row, write_csv)
+from extract import ExtractError
 from fetch import FetchResult
 from schema import ExtractionResult
 
@@ -144,11 +145,18 @@ def test_write_csv_utf8_bom(tmp_path):
 
 
 def test_process_row_no_candidate_is_cached(tmp_path, monkeypatch):
-    # no_candidate도 캐시한다 — 안 그러면 매 실행마다 60초짜리 탐색을 다시 돈다
+    # 정당한 0건(탐색은 됐지만 후보가 없음)은 캐시해도 된다 — 재검색은 discovered/ 캐시가 막는다
     monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_candidate"
     assert (tmp_path / "raw" / "연세대학교.json").exists()
+
+
+def test_process_row_transient_discovery_failure_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: None)
+    record = process_row(_row(url=None), tmp_path)
+    assert record["flag"] == "no_source"      # 탐색을 못 했으므로 no_candidate가 아니다
+    assert not (tmp_path / "raw" / "연세대학교.json").exists()   # 캐시 안 함 → 다음 실행에서 재시도
 
 
 def test_write_csv_sanitizes_formula_prefix(tmp_path):
@@ -166,6 +174,19 @@ def test_process_row_fetch_failed_not_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])   # 수동 URL 실패 후 탐색 폴백, 후보 없음
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "fetch_failed"   # 수동 시도의 실패 flag 유지
+    assert not (tmp_path / "raw" / "연세대학교.json").exists()
+
+
+def test_process_row_extract_failed_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
+
+    def boom(body, u, y, cands=None):
+        raise ExtractError("세션 한도")
+
+    monkeypatch.setattr(crawl, "extract", boom)
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    record = process_row(_row(), tmp_path)
+    assert record["flag"] == "extract_failed"
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
 
 
