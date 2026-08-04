@@ -24,8 +24,9 @@ BODY_SELECTORS = [
     "article",
 ]
 
-_IG_HANDLE = re.compile(r"instagram\.com/([A-Za-z0-9_.]{2,30})")
+_IG_HANDLE = re.compile(r"(?:^|[/.\"'\s])(?:www\.)?instagram\.com/([A-Za-z0-9_.]{2,30})")
 _IG_NON_HANDLES = {"p", "reel", "reels", "explore", "accounts", "stories", "share"}
+_IG_FILE_SUFFIXES = ("js", "css", "json", "png", "jpg", "jpeg", "gif", "svg", "ico", "html")
 
 _LAST_REQUEST: dict[str, float] = {}          # host -> monotonic ts
 _ROBOTS: dict[str, robotparser.RobotFileParser] = {}   # host -> parser
@@ -102,8 +103,11 @@ def instagram_candidates(html: str) -> list[str]:
     found: list[str] = []
     for match in _IG_HANDLE.finditer(html):
         handle = match.group(1).lower().rstrip(".")
-        if handle not in _IG_NON_HANDLES and handle not in found:
-            found.append(handle)
+        if handle.rsplit(".", 1)[-1] in _IG_FILE_SUFFIXES:
+            continue          # embed.js, static.css 등 파일명은 핸들이 아니다
+        if handle in _IG_NON_HANDLES or handle in found:
+            continue
+        found.append(handle)
     return found
 
 

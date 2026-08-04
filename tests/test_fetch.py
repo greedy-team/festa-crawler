@@ -74,3 +74,20 @@ def test_instagram_candidates_dedup_and_lowercase():
 
 def test_instagram_candidates_empty_when_none():
     assert fetch.instagram_candidates("<html><body>없음</body></html>") == []
+
+
+def test_instagram_candidates_excludes_embed_script():
+    html = (
+        '<script async src="//www.instagram.com/embed.js"></script>'
+        '<a href="https://www.instagram.com/hyu_festival/">계정</a>'
+    )
+    assert fetch.instagram_candidates(html) == ["hyu_festival"]
+
+
+def test_instagram_candidates_rejects_lookalike_domain():
+    assert fetch.instagram_candidates('<a href="https://notinstagram.com/evil">x</a>') == []
+
+
+def test_instagram_candidates_keeps_dotted_handles():
+    html = '<a href="https://www.instagram.com/smu.festival/">상명대</a>'
+    assert fetch.instagram_candidates(html) == ["smu.festival"]
