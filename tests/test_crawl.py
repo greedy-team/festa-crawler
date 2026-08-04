@@ -72,6 +72,36 @@ def test_process_row_mismatch_flag(tmp_path, monkeypatch):
     assert record["extraction"] is not None   # 결과는 보존, 판단은 사람이
 
 
+def test_process_row_refetches_when_cached_year_differs(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    stale = {"university": "연세대학교", "campus": "신촌캠퍼스",
+             "region": "서울 서대문구", "year": 2025, "url": "https://example.com/post",
+             "flag": "ok", "poster_image_url": None, "extraction": _extraction().model_dump()}
+    (raw_dir / "연세대학교.json").write_text(json.dumps(stale), "utf-8")
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y: _extraction())
+    record = process_row(_row(), tmp_path)   # _row()의 year는 2026
+    assert record["year"] == 2026
+
+
+def test_process_row_cache_hit_refreshes_campus_region(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    cached = {"university": "연세대학교", "campus": "옛캠퍼스",
+              "region": "서울 옛구", "year": 2026, "url": "https://example.com/post",
+              "flag": "ok", "poster_image_url": None, "extraction": _extraction().model_dump()}
+    (raw_dir / "연세대학교.json").write_text(json.dumps(cached), "utf-8")
+
+    def boom(url):
+        raise AssertionError("캐시 적중이면 fetch하면 안 됨")
+
+    monkeypatch.setattr(crawl, "fetch_body", boom)
+    record = process_row(_row(), tmp_path)
+    assert record["campus"] == "신촌캠퍼스"
+    assert record["region"] == "서울 서대문구"
+
+
 def test_build_rows():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,

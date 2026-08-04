@@ -76,6 +76,18 @@ def test_enrich_updates_lineup_and_writes_artists(tmp_path, monkeypatch):
     assert artists["잔나비"]["needs_review"] == "false"
 
 
+def test_normalize_uses_extended_timeout(monkeypatch):
+    captured = {}
+
+    def fake(prompt, timeout=120):
+        captured["timeout"] = timeout
+        return ENRICH_JSON
+
+    monkeypatch.setattr(enrich, "call_claude", fake)
+    enrich.normalize(["십센치"])
+    assert captured["timeout"] == enrich.ENRICH_TIMEOUT_SECONDS
+
+
 def test_enrich_no_names_is_noop(tmp_path, monkeypatch):
     (tmp_path / "raw").mkdir(parents=True)
 

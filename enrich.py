@@ -13,6 +13,8 @@ from schema import EnrichResult
 ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
                  "aliases", "needs_review"]
 
+ENRICH_TIMEOUT_SECONDS = 600  # 대량 배치(수백 명) 정규화는 추출 1건보다 오래 걸린다
+
 PROMPT_TEMPLATE = """다음은 대학 축제 라인업에서 추출한 아티스트 표기 목록입니다.
 당신이 아는 지식으로 각 표기를 정식 활동명으로 정규화하고, 아티스트 마스터 정보를 만드세요.
 
@@ -49,7 +51,7 @@ def normalize(names: list[str]) -> EnrichResult:
     prompt = PROMPT_TEMPLATE.format(names="\n".join(f"- {n}" for n in names))
     last_error = None
     for attempt in range(2):
-        raw = call_claude(prompt)
+        raw = call_claude(prompt, timeout=ENRICH_TIMEOUT_SECONDS)
         start, end = raw.find("{"), raw.rfind("}")
         try:
             return EnrichResult.model_validate_json(raw[start : end + 1])

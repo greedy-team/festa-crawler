@@ -53,9 +53,12 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
     cache_path = raw_dir / f"{row.university}.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached.get("url") == row.url:
+        if cached.get("url") == row.url and cached.get("year") == row.year:
+            # 시드 전용 필드는 현재 행 기준으로 갱신 (추출 결과에는 영향 없음)
+            cached["campus"] = row.campus
+            cached["region"] = row.region
             return cached
-        # URL이 바뀌었으면 캐시 무시하고 다시 처리 (아래에서 덮어씀)
+        # URL 또는 연도가 바뀌었으면 캐시 무시하고 다시 처리 (아래에서 덮어씀)
 
     record = {
         "university": row.university, "campus": row.campus,
