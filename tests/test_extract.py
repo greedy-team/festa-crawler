@@ -65,3 +65,28 @@ def test_verify_fails_on_mismatch():
     assert verify(_result(university_name="고려대학교"), "연세대학교", 2026) is False
     assert verify(_result(year=2025), "연세대학교", 2026) is False
     assert verify(_result(university_name=""), "연세대학교", 2026) is False
+
+
+def test_extract_passes_candidates_into_prompt(monkeypatch):
+    captured = {}
+
+    def fake(prompt, timeout=120):
+        captured["prompt"] = prompt
+        return VALID_JSON
+
+    monkeypatch.setattr(extract, "call_claude", fake)
+    extract.extract("본문", "한양대학교", 2026, instagram_candidates=["hyu_festival", "blogowner"])
+    assert "hyu_festival" in captured["prompt"]
+    assert "blogowner" in captured["prompt"]
+
+
+def test_extract_without_candidates_prompts_none(monkeypatch):
+    captured = {}
+
+    def fake(prompt, timeout=120):
+        captured["prompt"] = prompt
+        return VALID_JSON
+
+    monkeypatch.setattr(extract, "call_claude", fake)
+    extract.extract("본문", "연세대학교", 2026)
+    assert "후보 없음" in captured["prompt"]

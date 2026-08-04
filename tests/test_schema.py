@@ -58,3 +58,16 @@ def test_artist_master_defaults():
     a = ArtistMaster.model_validate({"name_canonical": "잔나비"})
     assert a.needs_review is False
     assert a.aliases == []
+
+
+def test_extraction_result_instagram_handle_optional():
+    # 구 캐시(필드 없음)와 신규 응답 모두 파싱돼야 한다
+    old = ExtractionResult.model_validate(
+        {"found": True, "university_name": "연세대학교", "year": 2026}
+    )
+    assert old.instagram_handle is None
+    new = ExtractionResult.model_validate(
+        {"found": True, "university_name": "한양대학교", "year": 2026,
+         "instagram_handle": "hyu_festival"}
+    )
+    assert new.instagram_handle == "hyu_festival"

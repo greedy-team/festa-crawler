@@ -20,14 +20,20 @@ PROMPT_TEMPLATE = """다음은 '{university}'의 {year}년 축제 관련 블로�
 - artist_raw: 본문에 적힌 표기 그대로 씁니다 (정규화 금지).
 - is_secret: '시크릿', '당일 공개' 등으로 표기된 미공개 출연자면 true.
 - date는 YYYY-MM-DD로 정규화 가능할 때만 채웁니다.
+- instagram_handle: 아래 후보와 본문을 종합해 '{university}'의 축제·총학생회 공식 계정이
+  확실한 것만 채웁니다. 블로그 운영자·언론사·무관 계정이면 null. 후보에 없는 계정을 지어내지 마세요.
 - 설명이나 마크다운 없이 JSON 객체 하나만 출력하세요.
 
 스키마:
 {{"found": bool, "university_name": str, "year": int,
   "festival_name": str|null, "start_date": str|null, "end_date": str|null,
   "venue_name": str|null, "outsider_admission": str|null, "ticket_info": str|null,
+  "instagram_handle": str|null,
   "lineup": [{{"artist_raw": str, "day_label": str|null, "date": str|null,
               "time": str|null, "is_secret": bool}}]}}
+
+본문 링크에서 발견된 인스타그램 계정 후보:
+{candidates}
 
 본문:
 {body}"""
@@ -65,17 +71,31 @@ def _extract_json(text: str) -> str:
     return text[start : end + 1]
 
 
-def extract(body: str, university: str, year: int) -> ExtractionResult:
-    prompt = PROMPT_TEMPLATE.format(university=university, year=year, body=body)
+def extract(
+    body: str,
+    university: str,
+    year: int,
+    instagram_candidates: list[str] | None = None,
+) -> ExtractionResult:
+    candidates = (
+        "\n".join(f"- {c}" for c in instagram_candidates)
+        if instagram_candidates
+        else "(후보 없음)"
+    )
+    prompt = PROMPT_TEMPLATE.format(
+        university=university, year=year, body=body, candidates=candidates
+    )
     last_error = None
-    for attempt in range(2):  # 최초 1회 + 재시도 1회
+    for _ in range(2):
         raw = call_claude(prompt)
         try:
             return ExtractionResult.model_validate_json(_extract_json(raw))
         except (ValueError, ValidationError) as e:
             last_error = e
             prompt = (
-                PROMPT_TEMPLATE.format(university=university, year=year, body=body)
+                PROMPT_TEMPLATE.format(
+                    university=university, year=year, body=body, candidates=candidates
+                )
                 + f"\n\n[재시도] 이전 응답이 유효하지 않았습니다: {e}\n"
                   "스키마에 정확히 맞는 JSON 객체 하나만 다시 출력하세요."
             )
