@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -165,12 +166,25 @@ def _sanitize_cell(value) -> str:
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(
-            [{k: _sanitize_cell(v) for k, v in row.items()} for row in rows]
-        )
+    """CSV를 원자적으로 쓴다: 임시 파일에 쓴 뒤 os.replace()로 교체.
+
+    이렇게 하면 concurrent reader가 truncated file을 보지 않는다.
+    임시 파일과 대상이 같은 파일시스템에 있어야 os.replace() atomicity가 보장된다.
+    """
+    temp_path = path.parent / f"{path.name}.tmp"
+    try:
+        with open(temp_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(
+                [{k: _sanitize_cell(v) for k, v in row.items()} for row in rows]
+            )
+        os.replace(temp_path, path)
+    except Exception:
+        # 쓰기 실패하면 임시 파일을 치운다
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
 
 
 def run(input_csv: Path, out_dir: Path, limit: int | None = None) -> None:

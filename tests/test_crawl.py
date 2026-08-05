@@ -2,6 +2,8 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 import crawl
 from crawl import (UniversityRow, build_festival_row, build_lineup_rows,
                    process_row, write_csv)
@@ -166,6 +168,26 @@ def test_write_csv_sanitizes_formula_prefix(tmp_path):
         rows = list(csv.DictReader(f))
     assert rows[0]["a"] == "'=SUM(A1)"
     assert rows[0]["b"] == "'@잔나비"
+
+
+def test_write_csv_keeps_old_file_when_replace_fails(tmp_path, monkeypatch):
+    """os.replace() 실패 시 기존 파일이 보존되고 임시 파일도 정리된다."""
+    path = tmp_path / "out.csv"
+    write_csv(path, ["a"], [{"a": "이전"}])
+
+    def boom(src, dst):
+        raise OSError("swap 실패")
+
+    monkeypatch.setattr(crawl.os, "replace", boom)
+    with pytest.raises(OSError):
+        write_csv(path, ["a"], [{"a": "새것"}])
+
+    # 기존 내용이 보존되어 있다
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["a"] == "이전"
+    # 임시 파일도 정리되었다
+    assert list(tmp_path.glob("*.tmp*")) == []
 
 
 def test_process_row_fetch_failed_not_cached(tmp_path, monkeypatch):
