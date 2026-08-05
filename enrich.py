@@ -65,10 +65,22 @@ def enrich(out_dir: Path) -> None:
     if not names:
         print("정규화할 아티스트 없음 — 건너뜀")
         return
+
+    # lineup.csv 스키마를 LLM 호출 전에 검증한다 — normalize()는 578초짜리 LLM 호출이라,
+    # 구 스키마(festival_id 없음)로 뒤늦게 write_csv에서 실패하면 그 호출이 통째로 낭비된다.
+    lineup_path = out_dir / "lineup.csv"
+    if lineup_path.exists():
+        with open(lineup_path, newline="", encoding="utf-8-sig") as f:
+            header = csv.DictReader(f).fieldnames
+        if header != LINEUP_FIELDS:
+            raise SystemExit(
+                "lineup.csv가 예전 스키마입니다 (festival_id 없음) — "
+                "crawl.py를 먼저 다시 실행해 새 스키마로 재생성하세요."
+            )
+
     result = normalize(names)
 
     # lineup.csv의 artist_canonical 갱신 (매핑에 없는 표기는 원문 유지)
-    lineup_path = out_dir / "lineup.csv"
     if lineup_path.exists():
         with open(lineup_path, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.DictReader(f))

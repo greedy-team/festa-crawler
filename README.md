@@ -144,6 +144,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 `crawl.py`가 `output/festivals.csv`·`output/lineup.csv`를, `enrich.py`가 `output/artists.csv`를
 만든다.
 
+**스키마 변경 시 재생성.** `festival_id` 컬럼 도입(#9) 이전에 만든 `output/`가 남아 있다면
+새 스키마와 맞지 않는다 — `crawl.py`를 한 번 다시 실행해 재생성한다. `output/raw/*.json`
+캐시가 남아 있으면 캐시 히트만 일어나 LLM 호출 없이 빠르게 끝난다.
+
 **소요 시간.** 캐시가 빈 상태에서 29곳 전체를 돌면 30~50분 걸린다. 대부분이 LLM 호출 대기
 시간이고, 특히 검색 탐색은 1건에 60초 이상이다. 중간에 끊겨도 캐시가 남으니 같은 명령으로
 다시 실행하면 이어서 처리한다.

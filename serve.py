@@ -179,6 +179,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if self.path != "/api/run":
             return self._json(404, {"error": "not found"})
+        # 단순 크로스오리진 <form>은 Content-Type을 application/json으로 보낼 수 없다 —
+        # 이 검사가 사실상의 CSRF 방어선이다. "단순화"한답시고 지우면 안 된다.
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            return self._json(400, {"error": "잘못된 Content-Type"})
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
@@ -201,20 +205,20 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global OUT_DIR, ALLOWED
+    global ALLOWED
     parser = argparse.ArgumentParser(description="FESTA 검수 페이지 (로컬 전용)")
     parser.add_argument("--port", type=int, default=8765)
-    parser.add_argument("--output-dir", type=Path, default=ROOT / "output")
-    parser.add_argument("--input", type=Path, default=ROOT / "universities.csv")
     args = parser.parse_args()
 
-    OUT_DIR = args.output_dir
-    ALLOWED = load_allowed_universities(args.input)
+    ALLOWED = load_allowed_universities(ROOT / "universities.csv")
 
+    # 소켓을 먼저 열고 나서 브라우저를 연다 — 반대 순서면 두 번째 실행이 첫 번째 인스턴스의
+    # 탭을 열어놓고서 "Address already in use"로 죽는다.
+    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
     print(f"검수 페이지: {url}  (Ctrl+C로 종료)")
     webbrowser.open(url)
-    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+    server.serve_forever()
 
 
 if __name__ == "__main__":

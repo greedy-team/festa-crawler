@@ -4,13 +4,14 @@
 <title>FESTA 검수</title>
 <style>
   * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+         font: 14px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif; }
   header { display: flex; gap: 8px; align-items: center;
            padding: 8px 12px; border-bottom: 1px solid #ddd; }
   header .sp { flex: 1; }
   #log { margin: 0; padding: 8px 12px; max-height: 180px; overflow: auto;
          background: #111; color: #ddd; font-size: 12px; white-space: pre-wrap; }
-  main { display: flex; height: calc(100vh - 45px); }
+  main { display: flex; flex: 1; min-height: 0; }
   nav { width: 300px; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
   #filters { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid #eee; }
   #filters button.on { background: #222; color: #fff; }
@@ -70,6 +71,7 @@ async function load(retry = true) {
     else { $("status").textContent = "데이터 로드 실패"; }
     return;
   }
+  if ($("status").textContent.startsWith("데이터 로드 실패")) $("status").textContent = "대기 중";
   data = await res.json();
   render();
 }
@@ -93,7 +95,8 @@ function render() {
 
 function renderDetail(f) {
   if (!f) { $("detail").innerHTML = "<p>표시할 축제가 없습니다.</p>"; return; }
-  const lineup = data.lineup.filter((l) => l.festival_id === f.festival_id);
+  // festival_id가 없는 행(구 스키마 잔존)까지 undefined === undefined로 걸리지 않도록 truthy를 먼저 본다.
+  const lineup = data.lineup.filter((l) => l.festival_id && l.festival_id === f.festival_id);
   const url = safeUrl(f.source_url);
   const fields = [
     ["축제명", f.festival_name], ["기간", `${f.start_date} ~ ${f.end_date}`],
@@ -194,5 +197,6 @@ document.addEventListener("keydown", (e) => {
 });
 
 load();
+pollLog();   // 새로고침이 실행 중인 잡 도중이었으면 "대기 중" 오표시를 막는다 — running=false면 곧장 자체 정리된다.
 </script>
 </html>
