@@ -2,7 +2,14 @@
 
 읽기 전용이다 — output/에 쓰는 주체는 crawl.py와 enrich.py뿐이다.
 """
+import argparse
 import csv
+import json
+import subprocess
+import sys
+import threading
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -27,3 +34,162 @@ def load_data(out_dir: Path) -> dict:
         "lineup": read_csv(out_dir / "lineup.csv"),
         "artists": read_csv(out_dir / "artists.csv"),
     }
+
+
+JOB_SCRIPTS = {"crawl": "crawl.py", "enrich": "enrich.py"}
+
+
+class Job:
+    """동시에 하나만 도는 서브프로세스. LLM 세션 한도를 공유하므로 둘을 띄우지 않는다."""
+
+    def __init__(self) -> None:
+        self._proc: subprocess.Popen | None = None
+        self._lines: list[str] = []
+        self._lock = threading.Lock()
+
+    def running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def start(self, script: str, cwd: Path) -> None:
+        proc = subprocess.Popen(
+            [sys.executable, script], cwd=str(cwd),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+        )
+        with self._lock:
+            self._proc = proc
+            self._lines = [f"$ {sys.executable} {script}"]
+        threading.Thread(target=self._pump, args=(proc,), daemon=True).start()
+
+    def _pump(self, proc: subprocess.Popen) -> None:
+        for line in proc.stdout:
+            with self._lock:
+                self._lines.append(line.rstrip("\n"))
+        proc.wait()
+        with self._lock:
+            self._lines.append(f"[종료 코드 {proc.returncode}]")
+
+    def snapshot(self, from_index: int) -> dict:
+        with self._lock:
+            proc = self._proc
+            return {
+                "lines": self._lines[from_index:],
+                "running": proc is not None and proc.poll() is None,
+                "returncode": None if proc is None else proc.poll(),
+            }
+
+
+JOB = Job()
+
+
+def load_allowed_universities(seed_path: Path) -> set[str]:
+    """허용 목록. 임의 문자열이 파일 경로로 들어가는 것을 막는 유일한 방어선이다."""
+    with open(seed_path, newline="", encoding="utf-8-sig") as f:
+        return {r["university"].strip() for r in csv.DictReader(f)}
+
+
+def clear_cache(out_dir: Path, university: str, rediscover: bool) -> None:
+    """행 단위 재실행을 위해 캐시를 지운다. 없어도 통과한다 — 버튼을 두 번 눌러도 무해해야 한다."""
+    (out_dir / "raw" / f"{university}.json").unlink(missing_ok=True)
+    if rediscover:
+        (out_dir / "discovered" / f"{university}.json").unlink(missing_ok=True)
+
+
+def handle_run(payload: dict, out_dir: Path, allowed: set[str], start) -> tuple[int, dict]:
+    """POST /api/run 의 순수 로직. start(script) 는 잡 시작 함수다."""
+    job = payload.get("job")
+    if job not in JOB_SCRIPTS:
+        return 400, {"error": f"알 수 없는 job: {job!r}"}
+
+    university = payload.get("university")
+    if university is not None:
+        if job != "crawl":
+            return 400, {"error": "university는 crawl에서만 쓸 수 있습니다"}
+        # 허용 목록 검사가 경로 조립보다 먼저다. 정규화·이스케이프로 막지 않는다.
+        if university not in allowed:
+            return 400, {"error": f"시드에 없는 대학: {university!r}"}
+
+    if JOB.running():
+        return 409, {"error": "이미 실행 중입니다"}
+
+    if university is not None:
+        clear_cache(out_dir, university, bool(payload.get("rediscover")))
+
+    start(JOB_SCRIPTS[job])
+    return 200, {"started": job, "university": university}
+
+
+ROOT = Path(__file__).resolve().parent
+OUT_DIR = ROOT / "output"
+ALLOWED: set[str] = set()
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, status: int, body: bytes, content_type: str) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, status: int, obj: dict) -> None:
+        self._send(status, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
+                   "application/json; charset=utf-8")
+
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == "/":
+            html = (ROOT / "review.html").read_bytes()
+            return self._send(200, html, "text/html; charset=utf-8")
+        if path == "/api/data":
+            try:
+                return self._json(200, load_data(OUT_DIR))
+            except CsvUnreadable as e:
+                return self._json(503, {"error": str(e)})
+        if path == "/api/log":
+            query = self.path.split("?", 1)[1] if "?" in self.path else ""
+            from_index = 0
+            for part in query.split("&"):
+                if part.startswith("from="):
+                    from_index = int(part[5:] or 0)
+            return self._json(200, JOB.snapshot(from_index))
+        self._json(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        if self.path != "/api/run":
+            return self._json(404, {"error": "not found"})
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            return self._json(400, {"error": "잘못된 JSON"})
+        status, body = self._run(payload)
+        self._json(status, body)
+
+    def _run(self, payload: dict) -> tuple[int, dict]:
+        return handle_run(payload, OUT_DIR, ALLOWED,
+                          start=lambda script: JOB.start(script, ROOT))
+
+    def log_message(self, fmt, *args) -> None:
+        pass          # 접근 로그는 잡 로그를 가린다
+
+
+def main() -> None:
+    global OUT_DIR, ALLOWED
+    parser = argparse.ArgumentParser(description="FESTA 검수 페이지 (로컬 전용)")
+    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "output")
+    parser.add_argument("--input", type=Path, default=ROOT / "universities.csv")
+    args = parser.parse_args()
+
+    OUT_DIR = args.output_dir
+    ALLOWED = load_allowed_universities(args.input)
+
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"검수 페이지: {url}  (Ctrl+C로 종료)")
+    webbrowser.open(url)
+    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
