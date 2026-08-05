@@ -53,6 +53,8 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
   (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// esc()는 HTML 이스케이프일 뿐 URL 스킴은 걸러내지 않는다 — href/src에 넣기 전 별도로 검사한다.
+const safeUrl = (u) => /^https?:\/\//i.test(u ?? "") ? u : "";
 
 let data = { festivals: [], lineup: [], artists: [] };
 let filter = "problem";
@@ -60,9 +62,14 @@ let selected = 0;
 let logFrom = 0;
 let polling = null;
 
-async function load() {
+async function load(retry = true) {
   const res = await fetch("/api/data");
-  if (!res.ok) return;              // crawl이 쓰는 중 — 다음 기회에
+  if (!res.ok) {
+    // crawl이 쓰는 중일 수 있다 — 한 번만 재시도하고, 그래도 안 되면 화면에 알린다.
+    if (retry) { $("status").textContent = "데이터 로드 실패 — 재시도 중…"; setTimeout(() => load(false), 1500); }
+    else { $("status").textContent = "데이터 로드 실패"; }
+    return;
+  }
   data = await res.json();
   render();
 }
@@ -87,6 +94,7 @@ function render() {
 function renderDetail(f) {
   if (!f) { $("detail").innerHTML = "<p>표시할 축제가 없습니다.</p>"; return; }
   const lineup = data.lineup.filter((l) => l.festival_id === f.festival_id);
+  const url = safeUrl(f.source_url);
   const fields = [
     ["축제명", f.festival_name], ["기간", `${f.start_date} ~ ${f.end_date}`],
     ["장소", f.venue_name], ["외부인", f.outsider_admission],
@@ -108,10 +116,10 @@ function renderDetail(f) {
               ${l.artist_canonical !== l.artist_raw
                 ? `<span class="raw">← ${esc(l.artist_raw)}</span>` : ""}
               ${l.is_secret === "true" ? "🔒" : ""}</td></tr>`).join("")}</table>
-    <h3>원본 ${f.source_url
-      ? `<a href="${esc(f.source_url)}" target="_blank" rel="noreferrer">새 탭 ↗</a>` : ""}</h3>
-    ${f.source_url
-      ? `<iframe src="${esc(f.source_url)}" sandbox="allow-scripts"
+    <h3>원본 ${url
+      ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">새 탭 ↗</a>` : ""}</h3>
+    ${url
+      ? `<iframe src="${esc(url)}" sandbox="allow-scripts"
                  referrerpolicy="no-referrer"></iframe>`
       : "<p>출처 URL이 없습니다.</p>"}`;
 }
@@ -181,7 +189,7 @@ $("detail").onclick = (e) => {
 };
 document.addEventListener("keydown", (e) => {
   if (filter === "artists") return;
-  if (e.key === "j") { selected = Math.min(selected + 1, visible().length - 1); render(); }
+  if (e.key === "j") { selected = Math.max(0, Math.min(selected + 1, visible().length - 1)); render(); }
   if (e.key === "k") { selected = Math.max(selected - 1, 0); render(); }
 });
 
