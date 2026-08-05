@@ -138,6 +138,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 ```bash
 .venv/bin/python crawl.py [--limit N]   # --limit: 앞에서 N행만 처리 (스모크용)
 .venv/bin/python enrich.py              # crawl 완료 후 실행
+.venv/bin/python serve.py               # 검수 페이지 (브라우저 자동 오픈, 읽기 전용)
 ```
 
 `crawl.py`가 `output/festivals.csv`·`output/lineup.csv`를, `enrich.py`가 `output/artists.csv`를
@@ -146,6 +147,12 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 **소요 시간.** 캐시가 빈 상태에서 29곳 전체를 돌면 30~50분 걸린다. 대부분이 LLM 호출 대기
 시간이고, 특히 검색 탐색은 1건에 60초 이상이다. 중간에 끊겨도 캐시가 남으니 같은 명령으로
 다시 실행하면 이어서 처리한다.
+
+`serve.py`는 `output/`의 CSV를 브라우저에서 보여준다. **읽기 전용이다** — 값을 고치지
+않으며, `flag != ok`·`discovery = search`·`needs_review` 행을 골라 보고 원본과 대조하는
+용도다. 상단 버튼으로 `crawl`·`enrich` 전체 실행을, 각 축제에서 `다시 돌리기`(수집·추출만
+재시도)와 `탐색부터`(검색 후보까지 새로) 재실행을 걸 수 있다. 로컬 전용이라
+`127.0.0.1`에만 바인드한다.
 
 ## 대학 시드 (`universities.csv`)
 

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>FESTA 검수</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Apple SD Gothic Neo", sans-serif; }
+  header { display: flex; gap: 8px; align-items: center;
+           padding: 8px 12px; border-bottom: 1px solid #ddd; }
+  header .sp { flex: 1; }
+  #log { margin: 0; padding: 8px 12px; max-height: 180px; overflow: auto;
+         background: #111; color: #ddd; font-size: 12px; white-space: pre-wrap; }
+  main { display: flex; height: calc(100vh - 45px); }
+  nav { width: 300px; border-right: 1px solid #ddd; display: flex; flex-direction: column; }
+  #filters { display: flex; gap: 4px; padding: 8px; border-bottom: 1px solid #eee; }
+  #filters button.on { background: #222; color: #fff; }
+  #list { flex: 1; overflow: auto; margin: 0; padding: 0; list-style: none; }
+  #list li { padding: 6px 10px; cursor: pointer; border-bottom: 1px solid #f2f2f2; }
+  #list li.sel { background: #eef4ff; }
+  #list li.bad .flag { color: #c00; font-weight: 700; }
+  #list li .flag { font-size: 11px; color: #999; margin-right: 6px; }
+  #detail { flex: 1; overflow: auto; padding: 12px 16px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+  th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee;
+           vertical-align: top; }
+  th { width: 140px; color: #666; font-weight: 500; }
+  iframe { width: 100%; height: 520px; border: 1px solid #ddd; }
+  .raw { color: #999; }
+</style>
+
+<header>
+  <button id="run-crawl">전체 크롤</button>
+  <button id="run-enrich">enrich</button>
+  <span id="status">대기 중</span>
+  <span class="sp"></span>
+  <button id="log-toggle">로그</button>
+</header>
+<pre id="log" hidden></pre>
+<main>
+  <nav>
+    <div id="filters">
+      <button data-filter="problem" class="on">문제만</button>
+      <button data-filter="search">검색출처</button>
+      <button data-filter="all">전체</button>
+      <button data-filter="artists">아티스트</button>
+    </div>
+    <ul id="list"></ul>
+  </nav>
+  <section id="detail"></section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+  (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+let data = { festivals: [], lineup: [], artists: [] };
+let filter = "problem";
+let selected = 0;
+let logFrom = 0;
+let polling = null;
+
+async function load() {
+  const res = await fetch("/api/data");
+  if (!res.ok) return;              // crawl이 쓰는 중 — 다음 기회에
+  data = await res.json();
+  render();
+}
+
+function visible() {
+  if (filter === "search") return data.festivals.filter((r) => r.discovery === "search");
+  if (filter === "all") return data.festivals;
+  return data.festivals.filter((r) => r.flag !== "ok");
+}
+
+function render() {
+  if (filter === "artists") return renderArtists();
+  const rows = visible();
+  if (selected >= rows.length) selected = Math.max(0, rows.length - 1);
+  $("list").innerHTML = rows.map((r, i) => `
+    <li class="${i === selected ? "sel" : ""} ${r.flag === "ok" ? "" : "bad"}" data-i="${i}">
+      <span class="flag">${esc(r.flag)}</span>${esc(r.university)}
+    </li>`).join("");
+  renderDetail(rows[selected]);
+}
+
+function renderDetail(f) {
+  if (!f) { $("detail").innerHTML = "<p>표시할 축제가 없습니다.</p>"; return; }
+  const lineup = data.lineup.filter((l) => l.festival_id === f.festival_id);
+  const fields = [
+    ["축제명", f.festival_name], ["기간", `${f.start_date} ~ ${f.end_date}`],
+    ["장소", f.venue_name], ["외부인", f.outsider_admission],
+    ["티켓", f.ticket_info], ["인스타", f.instagram_handle],
+    ["포스터", f.poster_image_url], ["출처", f.discovery], ["flag", f.flag],
+  ];
+  $("detail").innerHTML = `
+    <h2>${esc(f.festival_id)}</h2>
+    <p>
+      <button class="rerun" data-uni="${esc(f.university)}" data-rediscover="0">다시 돌리기</button>
+      <button class="rerun" data-uni="${esc(f.university)}" data-rediscover="1">탐색부터</button>
+    </p>
+    <table>${fields.map(([k, v]) =>
+      `<tr><th>${esc(k)}</th><td>${esc(v) || "—"}</td></tr>`).join("")}</table>
+    <h3>라인업 ${lineup.length}건</h3>
+    <table>${lineup.map((l) => `
+      <tr><th>${esc(l.day_label)} ${esc(l.time)}</th>
+          <td>${esc(l.artist_canonical)}
+              ${l.artist_canonical !== l.artist_raw
+                ? `<span class="raw">← ${esc(l.artist_raw)}</span>` : ""}
+              ${l.is_secret === "true" ? "🔒" : ""}</td></tr>`).join("")}</table>
+    <h3>원본 ${f.source_url
+      ? `<a href="${esc(f.source_url)}" target="_blank" rel="noreferrer">새 탭 ↗</a>` : ""}</h3>
+    ${f.source_url
+      ? `<iframe src="${esc(f.source_url)}" sandbox="allow-scripts"
+                 referrerpolicy="no-referrer"></iframe>`
+      : "<p>출처 URL이 없습니다.</p>"}`;
+}
+
+function renderArtists() {
+  const rows = [...data.artists].sort(
+    (a, b) => (b.needs_review === "true") - (a.needs_review === "true"));
+  $("list").innerHTML = "";
+  $("detail").innerHTML = `
+    <h2>아티스트 ${rows.length}</h2>
+    <table><tr><th>정식 표기</th><td>영문 / 본명 / 분류 / 다른 표기</td></tr>
+    ${rows.map((a) => `
+      <tr><th>${a.needs_review === "true" ? "⚠️ " : ""}${esc(a.name_canonical)}</th>
+          <td>${esc(a.name_en)} / ${esc(a.real_name)} / ${esc(a.category)}
+              / ${esc(a.aliases)}</td></tr>`).join("")}</table>`;
+}
+
+async function run(job, university, rediscover) {
+  const res = await fetch("/api/run", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ job, university, rediscover }),
+  });
+  const body = await res.json();
+  if (!res.ok) { alert(body.error); return; }
+  $("log").hidden = false;
+  logFrom = 0;
+  $("log").textContent = "";
+  pollLog();
+}
+
+function pollLog() {
+  clearInterval(polling);
+  polling = setInterval(async () => {
+    const body = await (await fetch(`/api/log?from=${logFrom}`)).json();
+    if (body.lines.length) {
+      $("log").textContent += body.lines.join("\n") + "\n";
+      logFrom += body.lines.length;
+      $("log").scrollTop = $("log").scrollHeight;
+    }
+    $("status").textContent = body.running ? "실행 중…"
+      : body.returncode === 0 ? "완료"
+      : body.returncode == null ? "대기 중" : `실패 (코드 ${body.returncode})`;
+    if (!body.running) { clearInterval(polling); polling = null; load(); }
+  }, 1000);
+}
+
+$("run-crawl").onclick = () => run("crawl", null, false);
+$("run-enrich").onclick = () => run("enrich", null, false);
+$("log-toggle").onclick = () => { $("log").hidden = !$("log").hidden; };
+$("filters").onclick = (e) => {
+  if (e.target.tagName !== "BUTTON") return;
+  filter = e.target.dataset.filter;
+  selected = 0;
+  [...$("filters").children].forEach((b) => b.classList.toggle("on", b === e.target));
+  render();
+};
+$("list").onclick = (e) => {
+  const li = e.target.closest("li");
+  if (!li) return;
+  selected = Number(li.dataset.i);
+  render();
+};
+$("detail").onclick = (e) => {
+  const b = e.target.closest("button.rerun");
+  if (!b) return;
+  run("crawl", b.dataset.uni, b.dataset.rediscover === "1");
+};
+document.addEventListener("keydown", (e) => {
+  if (filter === "artists") return;
+  if (e.key === "j") { selected = Math.min(selected + 1, visible().length - 1); render(); }
+  if (e.key === "k") { selected = Math.max(selected - 1, 0); render(); }
+});
+
+load();
+</script>
+</html>
