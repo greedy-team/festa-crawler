@@ -368,3 +368,65 @@ def test_lineup_rows_drop_denormalized_columns():
     lrow = build_lineup_rows(record)[0]
     for dropped in ("university", "year", "festival_name"):
         assert dropped not in lrow
+
+
+def test_process_row_prefers_sitemap_and_skips_websearch(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "discover_sitemap",
+                        lambda u, y: ["https://blog.example.com/entry/2026-연세대학교-축제"])
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+
+    def boom(university, year, out_dir):
+        raise AssertionError("사이트맵이 성공하면 WebSearch를 부르면 안 됨")
+
+    monkeypatch.setattr(crawl, "discover_cached", boom)
+    record = process_row(_row(url=None), tmp_path)
+    assert record["flag"] == "ok"
+    assert record["discovery"] == "sitemap"
+    assert record["url"] == "https://blog.example.com/entry/2026-연세대학교-축제"
+
+
+def test_process_row_falls_back_to_websearch_when_sitemap_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
+    monkeypatch.setattr(crawl, "discover_cached",
+                        lambda u, y, o: ["https://found.example.com/post"])
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+    record = process_row(_row(url=None), tmp_path)
+    assert record["flag"] == "ok"
+    assert record["discovery"] == "search"
+
+
+def test_process_row_falls_back_when_sitemap_candidates_all_fail(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: ["https://bad.example.com/x"])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: ["https://good.example.com/y"])
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+
+    seen = []
+
+    def fake_verify(result, university, year):
+        seen.append(university)
+        return len(seen) > 1          # 첫 후보(사이트맵)는 탈락, 두 번째(검색)는 통과
+
+    monkeypatch.setattr(crawl, "verify", fake_verify)
+    record = process_row(_row(url=None), tmp_path)
+    assert record["flag"] == "ok"
+    assert record["discovery"] == "search"
+    assert record["url"] == "https://good.example.com/y"
+
+
+def test_process_row_no_candidate_when_both_sources_empty(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    record = process_row(_row(url=None), tmp_path)
+    assert record["flag"] == "no_candidate"
+    assert record["discovery"] == ""
+
+
+def test_process_row_transient_discovery_failure_after_sitemap_miss(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: None)
+    record = process_row(_row(url=None), tmp_path)
+    assert record["flag"] == "no_source"
+    assert not (tmp_path / "raw" / "연세대학교.json").exists()

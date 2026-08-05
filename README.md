@@ -15,11 +15,15 @@ flowchart TD
     seed["universities.csv<br/>대학 29곳 시드"] --> has{"시드에 URL이<br/>적혀 있나?"}
 
     has -->|"있음"| manual["수동 URL 1건 시도"]
-    has -->|"없음"| search
+    has -->|"없음"| sm
 
     manual --> mok{"성공?"}
     mok -->|"ok"| adopted["출처 확정<br/>discovery = manual"]
-    mok -->|"실패"| search["discover.py<br/>웹 검색으로 후보 수집"]
+    mok -->|"실패"| sm["사이트맵 후보<br/>정식 표기 + 연도 매칭"]
+
+    sm --> smok{"verify 통과한<br/>후보가 있나?"}
+    smok -->|"있음"| adoptedM["출처 확정<br/>discovery = sitemap"]
+    smok -->|"없음"| search["discover.py<br/>웹 검색으로 후보 수집"]
 
     search --> cand["후보를 순서대로<br/>최대 3개 시도"]
     cand --> cok{"verify 통과한<br/>후보가 있나?"}
@@ -27,6 +31,7 @@ flowchart TD
     cok -->|"없음"| failed["no_candidate<br/>(수동 URL이 있었다면<br/>그 실패 사유 유지)"]
 
     adopted --> csv["festivals.csv<br/>lineup.csv"]
+    adoptedM --> csv
     adoptedS --> csv
     failed --> csv
 
@@ -79,7 +84,7 @@ erDiagram
         string ticket_info "유료/예매"
         string instagram_handle "총학 계정"
         string source_url "출처 URL"
-        string discovery "manual | search"
+        string discovery "manual | sitemap | search"
         string flag "처리 결과"
     }
     lineup {
@@ -198,7 +203,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 | | |
 | --- | --- |
 | 필터 `문제만` | `flag != ok` 행만. 진입 시 기본값 — 사람이 볼 것부터 보여준다 |
-| 필터 `검색출처` | `discovery = search` 행만. 손으로 고른 출처가 아니라 우선 확인 대상이다 |
+| 필터 `검색출처` | `discovery`가 `sitemap` 또는 `search`인 행. 손으로 고른 출처가 아니라 우선 확인 대상이다 |
 | 필터 `전체` | 축제 29곳 전부 |
 | 탭 `아티스트` | `artists.csv`를 `needs_review` 우선으로 정렬해 표시 (정렬만, 필터 아님) |
 | 상세 보기 | 축제 필드 전체 + 그 축제의 라인업. `artist_canonical ← artist_raw`로 정규화 전후를 나란히 |
@@ -275,7 +280,10 @@ CSV 재생성까지 따라온다.
   이미 처리된 대학은 캐시로 건너뛰고 나머지만 이어서 처리한다.
 - `enrich.py`는 전체 아티스트 목록을 한 번에 정규화하는 대형 LLM 호출 1건이라 수 분(최대
   15분 타임아웃) 걸릴 수 있다.
-- 검색으로 채워진 행(`discovery=search`)은 손으로 고른 출처가 아니므로 **검수 때 우선 확인한다.**
-  대학 공식 홈페이지나 학보사가 잡히면 신뢰도가 높고, 커뮤니티·티켓 플랫폼이면 한 번 더 본다.
+- 자동으로 채워진 행(`discovery=sitemap` 또는 `search`)은 손으로 고른 출처가 아니므로
+  **검수 때 우선 확인한다.** 대학 공식 홈페이지나 학보사가 잡히면 신뢰도가 높고,
+  커뮤니티·티켓 플랫폼이면 한 번 더 본다.
+- `discovery=sitemap`은 특정 블로그 몇 곳에서만 나온다. 시즌 종료 후 `discovery` 분포를 세어
+  단일 출처 편중이 심해지지 않았는지 확인하고, 심해졌으면 탐색 순서를 재검토한다.
 - 크롤러 산출물은 초안이다. **`./admin.sh`로 검토한 뒤 백엔드 어드민에 CSV를 첨부한다** —
   최종 신뢰는 검수 단계가 담보한다.

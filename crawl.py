@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from discover import MAX_CANDIDATES, discover_cached
+from discover import MAX_CANDIDATES, discover_cached, discover_sitemap
 from extract import ExtractError, extract, verify
 from fetch import fetch_body
 
@@ -70,6 +70,24 @@ def _attempt_url(url: str, row: UniversityRow) -> dict:
     return attempt
 
 
+def _try_candidates(
+    candidates: list[str], row: UniversityRow, record: dict, source: str
+) -> bool:
+    """후보를 순서대로 시도해 verify를 통과한 첫 건을 record에 채택한다.
+
+    채택하면 True. 어느 후보도 통과하지 못하면 record를 건드리지 않고 False —
+    수동 URL의 실패 사유가 그대로 남는다.
+    """
+    for candidate in candidates[:MAX_CANDIDATES]:
+        attempt = _attempt_url(candidate, row)
+        if attempt["flag"] == "ok":
+            record.update(attempt)
+            record["url"] = candidate
+            record["discovery"] = source
+            return True
+    return False
+
+
 def process_row(row: UniversityRow, out_dir: Path) -> dict:
     """대학 1곳 처리. 수동 URL 우선, 실패하면 검색 후보로 폴백."""
     raw_dir = out_dir / "raw"
@@ -96,21 +114,18 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
         record["discovery"] = "manual" if record["flag"] == "ok" else ""
 
     if record["flag"] != "ok":
-        candidates = discover_cached(row.university, row.year, out_dir)
-        if candidates is None:
-            # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
-            return record
-        for candidate in candidates[:MAX_CANDIDATES]:
-            attempt = _attempt_url(candidate, row)
-            if attempt["flag"] == "ok":
-                record.update(attempt)
-                record["url"] = candidate
-                record["discovery"] = "search"
-                break
-        else:
-            # 어느 후보도 verify를 통과하지 못함
-            if row.url is None:
-                record["flag"] = "no_candidate"
+        # 사이트맵 우선 — 통과하면 WebSearch(1건 60초 + 세션 한도)를 아예 부르지 않는다
+        if not _try_candidates(
+            discover_sitemap(row.university, row.year), row, record, "sitemap"
+        ):
+            candidates = discover_cached(row.university, row.year, out_dir)
+            if candidates is None:
+                # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
+                return record
+            if not _try_candidates(candidates, row, record, "search"):
+                # 어느 후보도 verify를 통과하지 못함
+                if row.url is None:
+                    record["flag"] = "no_candidate"
 
     if record["flag"] not in ("fetch_failed", "extract_failed"):
         cache_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
