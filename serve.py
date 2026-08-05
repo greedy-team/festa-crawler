@@ -48,18 +48,24 @@ class Job:
         self._lock = threading.Lock()
 
     def running(self) -> bool:
-        return self._proc is not None and self._proc.poll() is None
-
-    def start(self, script: str, cwd: Path) -> None:
-        proc = subprocess.Popen(
-            [sys.executable, script], cwd=str(cwd),
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1,
-        )
         with self._lock:
+            return self._proc is not None and self._proc.poll() is None
+
+    def start(self, script: str, cwd: Path) -> bool:
+        """확인과 시작을 락 하나로 묶는다 — 그래야 두 요청이 동시에 잡을 못 띄운다.
+        경합에서 졌으면 False."""
+        with self._lock:
+            if self._proc is not None and self._proc.poll() is None:
+                return False
+            proc = subprocess.Popen(
+                [sys.executable, script], cwd=str(cwd),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, encoding="utf-8", errors="replace", bufsize=1,
+            )
             self._proc = proc
             self._lines = [f"$ {sys.executable} {script}"]
         threading.Thread(target=self._pump, args=(proc,), daemon=True).start()
+        return True
 
     def _pump(self, proc: subprocess.Popen) -> None:
         for line in proc.stdout:
@@ -72,10 +78,11 @@ class Job:
     def snapshot(self, from_index: int) -> dict:
         with self._lock:
             proc = self._proc
+            returncode = None if proc is None else proc.poll()  # poll()은 한 번만
             return {
                 "lines": self._lines[from_index:],
-                "running": proc is not None and proc.poll() is None,
-                "returncode": None if proc is None else proc.poll(),
+                "running": proc is not None and returncode is None,
+                "returncode": returncode,
             }
 
 
@@ -115,8 +122,23 @@ def handle_run(payload: dict, out_dir: Path, allowed: set[str], start) -> tuple[
     if university is not None:
         clear_cache(out_dir, university, bool(payload.get("rediscover")))
 
-    start(JOB_SCRIPTS[job])
+    if not start(JOB_SCRIPTS[job]):
+        return 409, {"error": "이미 실행 중입니다"}
     return 200, {"started": job, "university": university}
+
+
+def parse_from_index(query: str) -> int | None:
+    """?from=N 파싱. 값이 없으면 0, 숫자가 아니면 None(= 400)."""
+    for part in query.split("&"):
+        if part.startswith("from="):
+            value = part[5:]
+            if not value:
+                return 0
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return 0
 
 
 ROOT = Path(__file__).resolve().parent
@@ -148,21 +170,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(503, {"error": str(e)})
         if path == "/api/log":
             query = self.path.split("?", 1)[1] if "?" in self.path else ""
-            from_index = 0
-            for part in query.split("&"):
-                if part.startswith("from="):
-                    from_index = int(part[5:] or 0)
+            from_index = parse_from_index(query)
+            if from_index is None:
+                return self._json(400, {"error": "잘못된 from 파라미터"})
             return self._json(200, JOB.snapshot(from_index))
         self._json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
         if self.path != "/api/run":
             return self._json(404, {"error": "not found"})
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return self._json(400, {"error": "잘못된 Content-Length"})
         try:
             payload = json.loads(self.rfile.read(length) or b"{}")
         except json.JSONDecodeError:
             return self._json(400, {"error": "잘못된 JSON"})
+        if not isinstance(payload, dict):
+            return self._json(400, {"error": "요청 본문은 객체여야 합니다"})
         status, body = self._run(payload)
         self._json(status, body)
 

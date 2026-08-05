@@ -95,9 +95,14 @@ def test_run_clears_raw_cache_only(tmp_path):
     (out / "raw" / "연세대학교.json").write_text("{}", encoding="utf-8")
     (out / "discovered" / "연세대학교.json").write_text("{}", encoding="utf-8")
     started = []
+
+    def start(script):
+        started.append(script)
+        return True
+
     status, body = serve.handle_run(
         {"job": "crawl", "university": "연세대학교"}, out, {"연세대학교"},
-        start=started.append)
+        start=start)
     assert status == 200
     assert started == ["crawl.py"]
     assert not (out / "raw" / "연세대학교.json").exists()
@@ -112,7 +117,7 @@ def test_run_rediscover_clears_both_caches(tmp_path):
     (out / "discovered" / "연세대학교.json").write_text("{}", encoding="utf-8")
     status, _ = serve.handle_run(
         {"job": "crawl", "university": "연세대학교", "rediscover": True}, out,
-        {"연세대학교"}, start=lambda script: None)
+        {"연세대학교"}, start=lambda script: True)
     assert status == 200
     assert not (out / "raw" / "연세대학교.json").exists()
     assert not (out / "discovered" / "연세대학교.json").exists()
@@ -123,7 +128,7 @@ def test_run_missing_cache_files_is_fine(tmp_path):
     out.mkdir()
     status, _ = serve.handle_run(
         {"job": "crawl", "university": "연세대학교", "rediscover": True}, out,
-        {"연세대학교"}, start=lambda script: None)
+        {"연세대학교"}, start=lambda script: True)
     assert status == 200          # 파일이 없어도 예외 없이 통과
 
 
@@ -131,3 +136,52 @@ def test_run_conflicts_while_job_running(tmp_path, monkeypatch):
     monkeypatch.setattr(serve.JOB, "running", lambda: True)
     status, body = serve.handle_run({"job": "crawl"}, tmp_path, set(), start=_never)
     assert status == 409
+
+
+def test_run_conflicts_when_start_loses_race(tmp_path):
+    # running()은 False를 보고했지만 start()가 실제 시작 시점에 경합에서 졌다고 보고하는 경우.
+    # start()의 반환값이 최종 판정이어야 한다.
+    status, body = serve.handle_run(
+        {"job": "crawl"}, tmp_path, set(), start=lambda script: False)
+    assert status == 409
+
+
+class _FlipFlopProc:
+    """poll()을 부를 때마다 다른 값을 반환한다 — snapshot()이 두 번 부르면 모순되는
+    (running=True, returncode=0) 같은 결과가 나온다는 걸 증명하는 가짜 프로세스."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def poll(self):
+        self.calls += 1
+        return None if self.calls == 1 else 0
+
+
+def test_job_snapshot_polls_once_and_fields_agree():
+    job = serve.Job()
+    job._lines = ["a", "b"]
+    job._proc = _FlipFlopProc()
+    snap = job.snapshot(0)
+    assert job._proc.calls == 1
+    assert snap == {"lines": ["a", "b"], "running": True, "returncode": None}
+
+
+def test_parse_from_index_absent_is_zero():
+    assert serve.parse_from_index("") == 0
+
+
+def test_parse_from_index_zero():
+    assert serve.parse_from_index("from=0") == 0
+
+
+def test_parse_from_index_positive():
+    assert serve.parse_from_index("from=5") == 5
+
+
+def test_parse_from_index_non_numeric_is_none():
+    assert serve.parse_from_index("from=abc") is None
+
+
+def test_parse_from_index_empty_value_is_zero():
+    assert serve.parse_from_index("from=") == 0
