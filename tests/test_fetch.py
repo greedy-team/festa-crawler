@@ -91,3 +91,54 @@ def test_instagram_candidates_rejects_lookalike_domain():
 def test_instagram_candidates_keeps_dotted_handles():
     html = '<a href="https://www.instagram.com/smu.festival/">상명대</a>'
     assert fetch.instagram_candidates(html) == ["smu.festival"]
+
+
+def test_fetch_text_returns_body(monkeypatch):
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+
+    class Resp:
+        text = "<urlset><loc>https://blog.example.com/entry/x</loc></urlset>"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp())
+    assert "urlset" in fetch.fetch_text("https://blog.example.com/sitemap.xml")
+
+
+def test_fetch_text_returns_none_when_robots_disallows(monkeypatch):
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: False)
+
+    def boom(url, **kw):
+        raise AssertionError("robots가 막으면 요청하면 안 됨")
+
+    monkeypatch.setattr(fetch.requests, "get", boom)
+    assert fetch.fetch_text("https://blog.example.com/sitemap.xml") is None
+
+
+def test_fetch_text_returns_none_on_request_error(monkeypatch):
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+
+    def boom(url, **kw):
+        raise fetch.requests.RequestException("timeout")
+
+    monkeypatch.setattr(fetch.requests, "get", boom)
+    assert fetch.fetch_text("https://blog.example.com/sitemap.xml") is None
+
+
+def test_fetch_text_respects_rate_limit(monkeypatch):
+    hosts = []
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", hosts.append)
+
+    class Resp:
+        text = "ok"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp())
+    fetch.fetch_text("https://blog.example.com/sitemap.xml")
+    assert hosts == ["blog.example.com"]
