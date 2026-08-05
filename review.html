@@ -77,7 +77,7 @@ async function load(retry = true) {
 }
 
 function visible() {
-  if (filter === "search") return data.festivals.filter((r) => r.discovery === "search");
+  if (filter === "search") return data.festivals.filter((r) => r.discovery === "sitemap" || r.discovery === "search");
   if (filter === "all") return data.festivals;
   return data.festivals.filter((r) => r.flag !== "ok");
 }

@@ -111,6 +111,25 @@ def instagram_candidates(html: str) -> list[str]:
     return found
 
 
+def fetch_text(url: str) -> str | None:
+    """robots·요청 간격을 지켜 응답 본문을 문자열로 가져온다. 실패하면 None.
+
+    HTML 파싱을 하지 않는다 — sitemap.xml처럼 구조화 문서를 그대로 받을 때 쓴다.
+    재시도하지 않는다: 호출자가 실패를 폴백 신호로 쓴다.
+    """
+    if not _robots_allowed(url):
+        return None
+    _respect_rate_limit(urlparse(url).netloc)
+    try:
+        resp = requests.get(
+            url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS
+        )
+        resp.raise_for_status()
+        return resp.text
+    except requests.RequestException:
+        return None
+
+
 def fetch_body(url: str) -> FetchResult:
     if not _robots_allowed(url):
         return FetchResult(status="fetch_failed", error="robots_disallowed")
