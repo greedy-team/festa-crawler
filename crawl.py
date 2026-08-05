@@ -89,7 +89,7 @@ def _try_candidates(
 
 
 def process_row(row: UniversityRow, out_dir: Path) -> dict:
-    """대학 1곳 처리. 수동 URL 우선, 실패하면 검색 후보로 폴백."""
+    """대학 1곳 처리. 수동 URL → 사이트맵 후보 → 검색 후보 순으로 시도한다."""
     raw_dir = out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     cache_path = raw_dir / f"{row.university}.json"
