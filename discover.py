@@ -4,12 +4,14 @@ fetch.py와 같은 원칙 — 후보를 모으기만 하고 "이 글이 맞는 �
 그 판정은 crawl이 extract → verify로 수행한다.
 """
 import json
+import re
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from pydantic import ValidationError
 
 from extract import ExtractError, _extract_json, call_claude
+from fetch import fetch_text
 from schema import DiscoverResult
 
 DISCOVER_TIMEOUT_SECONDS = 300   # 실측 63초 + 검색 왕복 여유
@@ -23,6 +25,18 @@ BLOCKED_DOMAINS = frozenset({
     "instagram.com",        # robots 전면 차단 — fetch가 확정 실패한다
     "youtube.com", "youtu.be",   # 영상이라 추출할 본문이 없다
 })
+
+# 이미 출처로 쓰고 있는 블로그들의 사이트맵. robots.txt가 /search는 막지만 sitemap.xml은 막지 않는다.
+SITEMAP_SOURCES = (
+    "https://memogipost.tistory.com/sitemap.xml",
+    "https://news.comingmoney.com/sitemap.xml",
+    "https://schedule.comingmoney.com/sitemap.xml",
+    "https://jcks100.com/sitemap.xml",
+    "https://towbworld.tistory.com/sitemap.xml",
+)
+
+_LOC = re.compile(r"<loc>(.*?)</loc>", re.DOTALL)
+_sitemap_urls: list[str] | None = None      # 프로세스 1회 로드 (디스크 캐시 아님)
 
 PROMPT_TEMPLATE = """'{university}'의 {year}년 대학 축제 라인업을 다룬 웹 문서를 검색해서,
 실제로 접근 가능한 URL만 골라 JSON으로 알려주세요.
@@ -42,6 +56,43 @@ PROMPT_TEMPLATE = """'{university}'의 {year}년 대학 축제 라인업을 다�
 def _is_blocked(url: str) -> bool:
     host = urlparse(url).netloc.lower().rsplit("@", 1)[-1].split(":")[0]
     return any(host == d or host.endswith("." + d) for d in BLOCKED_DOMAINS)
+
+
+def _load_sitemap_urls() -> list[str]:
+    """대상 사이트맵에서 글 URL을 모은다. 프로세스 안에서 1회만 받는다.
+
+    디스크에 캐시하지 않는다 — 새 글이 계속 올라와 재실행하면 달라지는 상태다.
+    소스 하나가 실패하면 그 소스만 건너뛴다.
+    """
+    global _sitemap_urls
+    if _sitemap_urls is not None:
+        return _sitemap_urls
+    urls: list[str] = []
+    for source in SITEMAP_SOURCES:
+        xml = fetch_text(source)
+        if xml is None:
+            print(f"  사이트맵 수집 실패: {source}", flush=True)
+            continue
+        for raw in _LOC.findall(xml):
+            loc = unquote(raw.strip())
+            if "/entry/" in loc:
+                urls.append(loc)
+    _sitemap_urls = urls
+    return urls
+
+
+def discover_sitemap(university: str, year: int) -> list[str]:
+    """사이트맵에서 대학 정식 표기와 연도가 모두 든 글 URL을 등장순으로 반환한다.
+
+    엄격 매칭이다 — 어간('고려대')·줄임말('고대')은 쓰지 않는다. 실측에서 '성대'가
+    경성대·한성대를, '연대'가 경연대회를 잡았고, 어간은 다른 캠퍼스 글을 끌어왔다.
+    관련성 판정은 하지 않는다. '서울대공원' 같은 오탐은 verify가 걸러낸다.
+    """
+    return [
+        url
+        for url in _load_sitemap_urls()
+        if university in url and str(year) in url and not _is_blocked(url)
+    ]
 
 
 def discover(university: str, year: int) -> list[str]:

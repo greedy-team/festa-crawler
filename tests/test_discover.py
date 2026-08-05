@@ -1,4 +1,5 @@
 import json
+from urllib.parse import quote
 
 import pytest
 
@@ -131,3 +132,101 @@ def test_discover_prompt_tells_llm_to_skip_unreadable_sources(monkeypatch):
     discover.discover("한양대학교", 2026)
     assert "인스타그램" in captured["prompt"]
     assert "유튜브" in captured["prompt"]
+
+
+def _sitemap(*slugs: str) -> str:
+    """실제 사이트맵처럼 퍼센트 인코딩된 <loc> 목록을 만든다."""
+    locs = "".join(
+        f"<loc>https://blog.example.com/entry/{quote(s)}</loc>" for s in slugs
+    )
+    return f'<?xml version="1.0" encoding="UTF-8"?><urlset>{locs}</urlset>'
+
+
+def test_discover_sitemap_strict_match_only(monkeypatch):
+    xml = _sitemap(
+        "2026-고려대학교-대동제",
+        "2026-고려대-과학기술대학-대동제",     # 어간 — 다른 캠퍼스
+        "2026-서울대공원-장미원축제",           # 유사 명칭
+    )
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://blog.example.com/sitemap.xml",))
+    monkeypatch.setattr(discover, "fetch_text", lambda url: xml)
+    urls = discover.discover_sitemap("고려대학교", 2026)
+    assert len(urls) == 1
+    assert "고려대학교-대동제" in urls[0]
+
+
+def test_discover_sitemap_filters_year(monkeypatch):
+    xml = _sitemap("2025-고려대학교-대동제", "2026-고려대학교-대동제")
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://blog.example.com/sitemap.xml",))
+    monkeypatch.setattr(discover, "fetch_text", lambda url: xml)
+    urls = discover.discover_sitemap("고려대학교", 2026)
+    assert len(urls) == 1
+    assert "2026" in urls[0]
+
+
+def test_discover_sitemap_skips_non_entry_urls(monkeypatch):
+    xml = ('<?xml version="1.0"?><urlset>'
+           '<loc>https://blog.example.com/category/2026-고려대학교</loc>'
+           '<loc>https://blog.example.com/entry/2026-고려대학교-대동제</loc>'
+           '</urlset>')
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://blog.example.com/sitemap.xml",))
+    monkeypatch.setattr(discover, "fetch_text", lambda url: xml)
+    urls = discover.discover_sitemap("고려대학교", 2026)
+    assert urls == ["https://blog.example.com/entry/2026-고려대학교-대동제"]
+
+
+def test_discover_sitemap_applies_blocked_domains(monkeypatch):
+    xml = ('<?xml version="1.0"?><urlset>'
+           '<loc>https://namu.wiki/entry/2026-고려대학교-대동제</loc>'
+           '<loc>https://blog.example.com/entry/2026-고려대학교-대동제</loc>'
+           '</urlset>')
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://blog.example.com/sitemap.xml",))
+    monkeypatch.setattr(discover, "fetch_text", lambda url: xml)
+    urls = discover.discover_sitemap("고려대학교", 2026)
+    assert urls == ["https://blog.example.com/entry/2026-고려대학교-대동제"]
+
+
+def test_discover_sitemap_fetches_once_per_process(monkeypatch):
+    calls = []
+    xml = _sitemap("2026-고려대학교-대동제", "2026-연세대학교-무악대동제")
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://blog.example.com/sitemap.xml",))
+
+    def fake(url):
+        calls.append(url)
+        return xml
+
+    monkeypatch.setattr(discover, "fetch_text", fake)
+    assert discover.discover_sitemap("고려대학교", 2026)
+    assert discover.discover_sitemap("연세대학교", 2026)
+    assert len(calls) == 1          # 두 번째 조회는 메모리 캐시
+
+
+def test_discover_sitemap_skips_failed_source(monkeypatch):
+    xml = _sitemap("2026-고려대학교-대동제")
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://dead.example.com/sitemap.xml",
+                                                     "https://blog.example.com/sitemap.xml"))
+    monkeypatch.setattr(
+        discover, "fetch_text", lambda url: None if "dead" in url else xml
+    )
+    urls = discover.discover_sitemap("고려대학교", 2026)
+    assert len(urls) == 1           # 죽은 소스는 건너뛰고 나머지로 진행
+
+
+def test_discover_sitemap_all_sources_fail_returns_empty(monkeypatch):
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://dead.example.com/sitemap.xml",))
+    monkeypatch.setattr(discover, "fetch_text", lambda url: None)
+    assert discover.discover_sitemap("고려대학교", 2026) == []
+
+
+def test_discover_sitemap_malformed_xml_does_not_raise(monkeypatch):
+    monkeypatch.setattr(discover, "_sitemap_urls", None)
+    monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://blog.example.com/sitemap.xml",))
+    monkeypatch.setattr(discover, "fetch_text", lambda url: "<urlset><loc>잘린")
+    assert discover.discover_sitemap("고려대학교", 2026) == []
