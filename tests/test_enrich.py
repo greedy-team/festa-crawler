@@ -2,6 +2,8 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 import enrich
 from crawl import LINEUP_FIELDS, write_csv
 from schema import EnrichResult
@@ -39,7 +41,7 @@ def _seed_output(out_dir: Path) -> None:
         },
     }, ensure_ascii=False), "utf-8")
     write_csv(out_dir / "lineup.csv", LINEUP_FIELDS, [
-        {"university": "연세대학교", "year": 2026, "festival_name": "아카라카",
+        {"festival_id": "연세대학교-2026",
          "day_label": "1일차", "date": "", "time": "",
          "artist_canonical": "십센치", "artist_raw": "십센치",
          "is_secret": "false", "source_url": "https://example.com/post"},
@@ -97,3 +99,23 @@ def test_enrich_no_names_is_noop(tmp_path, monkeypatch):
     monkeypatch.setattr(enrich, "call_claude", boom)
     enrich.enrich(tmp_path)   # 예외 없이 종료
     assert not (tmp_path / "artists.csv").exists()
+
+
+def test_enrich_old_schema_lineup_fails_before_llm(tmp_path, monkeypatch):
+    _seed_output(tmp_path)   # raw/*.json은 새 스키마 그대로 — collect_raw_names는 영향 없음
+    old_header = ["university", "year", "festival_name", "day_label", "date", "time",
+                  "artist_canonical", "artist_raw", "is_secret", "source_url"]
+    with open(tmp_path / "lineup.csv", "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=old_header)
+        w.writeheader()
+        w.writerow({"university": "연세대학교", "year": "2026", "festival_name": "아카라카",
+                    "day_label": "1일차", "date": "", "time": "",
+                    "artist_canonical": "십센치", "artist_raw": "십센치",
+                    "is_secret": "false", "source_url": "https://example.com/post"})
+
+    def boom(prompt, timeout=120):
+        raise AssertionError("스키마 검증 전에 LLM을 호출하면 안 됨")
+
+    monkeypatch.setattr(enrich, "call_claude", boom)
+    with pytest.raises(SystemExit):
+        enrich.enrich(tmp_path)

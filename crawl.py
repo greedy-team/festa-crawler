@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,15 +38,20 @@ def load_universities(path: Path) -> list[UniversityRow]:
 
 
 FESTIVAL_FIELDS = [
-    "university", "campus", "region", "year", "festival_name",
+    "festival_id", "university", "campus", "region", "year", "festival_name",
     "start_date", "end_date", "venue_name", "outsider_admission",
     "ticket_info", "instagram_handle", "poster_image_url", "source_url",
     "discovery", "flag",
 ]
 LINEUP_FIELDS = [
-    "university", "year", "festival_name", "day_label", "date", "time",
+    "festival_id", "day_label", "date", "time",
     "artist_canonical", "artist_raw", "is_secret", "source_url",
 ]
+
+
+def festival_id(university: str, year: int) -> str:
+    """축제 1건의 안정적인 식별자. 시드에서 university+year 조합이 유일함을 전제한다."""
+    return f"{university}-{year}"
 
 
 def _attempt_url(url: str, row: UniversityRow) -> dict:
@@ -114,6 +120,7 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
 def build_festival_row(record: dict) -> dict:
     ext = record["extraction"] or {}
     return {
+        "festival_id": festival_id(record["university"], record["year"]),
         "university": record["university"], "campus": record["campus"],
         "region": record["region"], "year": record["year"],
         "festival_name": ext.get("festival_name") or "",
@@ -134,15 +141,15 @@ def build_lineup_rows(record: dict) -> list[dict]:
     ext = record["extraction"]
     if not ext:
         return []
+    fid = festival_id(record["university"], record["year"])
     rows = []
     for item in ext["lineup"]:
         rows.append({
-            "university": record["university"], "year": record["year"],
-            "festival_name": ext.get("festival_name") or "",
+            "festival_id": fid,
             "day_label": item.get("day_label") or "",
             "date": item.get("date") or "",
             "time": item.get("time") or "",
-            "artist_canonical": item["artist_raw"],   # Task 6(enrich)이 갱신
+            "artist_canonical": item["artist_raw"],   # enrich가 갱신
             "artist_raw": item["artist_raw"],
             "is_secret": "true" if item.get("is_secret") else "false",
             "source_url": record["url"] or "",
@@ -159,12 +166,25 @@ def _sanitize_cell(value) -> str:
 
 
 def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
-    with open(path, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(
-            [{k: _sanitize_cell(v) for k, v in row.items()} for row in rows]
-        )
+    """CSV를 원자적으로 쓴다: 임시 파일에 쓴 뒤 os.replace()로 교체.
+
+    이렇게 하면 concurrent reader가 truncated file을 보지 않는다.
+    임시 파일과 대상이 같은 파일시스템에 있어야 os.replace() atomicity가 보장된다.
+    """
+    temp_path = path.parent / f"{path.name}.tmp"
+    try:
+        with open(temp_path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(
+                [{k: _sanitize_cell(v) for k, v in row.items()} for row in rows]
+            )
+        os.replace(temp_path, path)
+    except Exception:
+        # 쓰기 실패하면 임시 파일을 치운다
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
 
 
 def run(input_csv: Path, out_dir: Path, limit: int | None = None) -> None:

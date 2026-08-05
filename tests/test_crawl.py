@@ -2,6 +2,8 @@ import csv
 import json
 from pathlib import Path
 
+import pytest
+
 import crawl
 from crawl import (UniversityRow, build_festival_row, build_lineup_rows,
                    process_row, write_csv)
@@ -168,6 +170,26 @@ def test_write_csv_sanitizes_formula_prefix(tmp_path):
     assert rows[0]["b"] == "'@잔나비"
 
 
+def test_write_csv_keeps_old_file_when_replace_fails(tmp_path, monkeypatch):
+    """os.replace() 실패 시 기존 파일이 보존되고 임시 파일도 정리된다."""
+    path = tmp_path / "out.csv"
+    write_csv(path, ["a"], [{"a": "이전"}])
+
+    def boom(src, dst):
+        raise OSError("swap 실패")
+
+    monkeypatch.setattr(crawl.os, "replace", boom)
+    with pytest.raises(OSError):
+        write_csv(path, ["a"], [{"a": "새것"}])
+
+    # 기존 내용이 보존되어 있다
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["a"] == "이전"
+    # 임시 파일도 정리되었다
+    assert list(tmp_path.glob("*.tmp*")) == []
+
+
 def test_process_row_fetch_failed_not_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "fetch_body",
                         lambda url: FetchResult(status="fetch_failed", error="timeout"))
@@ -317,3 +339,32 @@ def test_process_row_cache_keyed_on_seed_url(tmp_path, monkeypatch):
     record = process_row(_row(url=None), tmp_path)   # 시드 url=None, 캐시의 seed_url도 None
     assert record["flag"] == "ok"
     assert record["url"] == "https://found.example.com/p"
+
+
+def test_festival_id_format():
+    assert crawl.festival_id("연세대학교", 2026) == "연세대학교-2026"
+
+
+def test_festival_id_links_festival_and_lineup():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "discovery": "manual",
+              "flag": "ok", "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    frow = build_festival_row(record)
+    lrows = build_lineup_rows(record)
+    assert frow["festival_id"] == "연세대학교-2026"
+    assert [r["festival_id"] for r in lrows] == ["연세대학교-2026"] * 2
+    assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
+    assert list(lrows[0].keys()) == crawl.LINEUP_FIELDS
+
+
+def test_lineup_rows_drop_denormalized_columns():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "discovery": "manual",
+              "flag": "ok", "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    lrow = build_lineup_rows(record)[0]
+    for dropped in ("university", "year", "festival_name"):
+        assert dropped not in lrow
