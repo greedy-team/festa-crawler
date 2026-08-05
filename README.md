@@ -58,10 +58,11 @@ flowchart LR
 
 ```mermaid
 erDiagram
-    festivals ||--o{ lineup : "university + year"
+    festivals ||--o{ lineup : "festival_id"
     lineup }o--|| artists : "artist_canonical"
 
     festivals {
+        string festival_id "축제 식별자 (대학명-연도)"
         string university "대학명 · 캠퍼스 · 지역"
         int year
         string festival_name "축제명"
@@ -75,7 +76,7 @@ erDiagram
         string flag "처리 결과"
     }
     lineup {
-        string university "대학 · 연도 · 축제명"
+        string festival_id "축제 식별자"
         string day_label "1일차 / DAY1 (원문 표기)"
         date date "정규화된 날짜"
         string time "공연 시각"

@@ -39,7 +39,7 @@ def _seed_output(out_dir: Path) -> None:
         },
     }, ensure_ascii=False), "utf-8")
     write_csv(out_dir / "lineup.csv", LINEUP_FIELDS, [
-        {"university": "연세대학교", "year": 2026, "festival_name": "아카라카",
+        {"festival_id": "연세대학교-2026",
          "day_label": "1일차", "date": "", "time": "",
          "artist_canonical": "십센치", "artist_raw": "십센치",
          "is_secret": "false", "source_url": "https://example.com/post"},
