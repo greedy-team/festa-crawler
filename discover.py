@@ -15,11 +15,13 @@ from schema import DiscoverResult
 DISCOVER_TIMEOUT_SECONDS = 300   # 실측 63초 + 검색 왕복 여유
 MAX_CANDIDATES = 3
 
-# robots·라이선스상 쓸 수 없는 곳. 검색 결과에 섞여 나오므로 여기서 뺀다.
+# robots·라이선스상 쓸 수 없거나 본문을 읽을 수 없는 곳. 검색 결과에 섞여 나오므로 여기서 뺀다.
 # 서브도메인도 함께 막는다 (m.search.naver.com 등).
 BLOCKED_DOMAINS = frozenset({
     "namu.wiki",            # CC BY-NC-SA(비영리) + Cloudflare 봇 방어
     "google.com", "search.naver.com",   # 검색 결과 페이지 자체
+    "instagram.com",        # robots 전면 차단 — fetch가 확정 실패한다
+    "youtube.com", "youtu.be",   # 영상이라 추출할 본문이 없다
 })
 
 PROMPT_TEMPLATE = """'{university}'의 {year}년 대학 축제 라인업을 다룬 웹 문서를 검색해서,
@@ -29,6 +31,7 @@ PROMPT_TEMPLATE = """'{university}'의 {year}년 대학 축제 라인업을 다�
 - 웹 검색 결과에 실제로 나온 URL만 씁니다. 절대 URL을 지어내지 마세요.
 - '{university}'의 {year}년 축제를 다룬 문서만 고릅니다. 다른 대학이나 다른 연도는 제외합니다.
 - 라인업·출연 가수·축제 일정을 다루는 문서를 우선합니다.
+- 인스타그램·유튜브는 본문 텍스트를 읽을 수 없으므로 제외하고, 글로 된 문서만 고릅니다.
 - 관련성이 높은 순서로 최대 8개까지.
 - 설명이나 마크다운 없이 JSON 객체 하나만 출력하세요.
 
