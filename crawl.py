@@ -202,6 +202,47 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
         raise
 
 
+ARTIST_MAPPING_NAME = "artist_mapping.json"
+
+
+def load_artist_mapping(base_dir: Path) -> dict[str, str]:
+    """표기 → 정식 표기 매핑. 연도 공통이므로 연도 폴더가 아니라 그 상위에 둔다.
+
+    파일이 없으면 빈 매핑 — 첫 실행의 정상 상태다. 파일이 깨졌으면 중단한다.
+    빈 매핑으로 진행하면 lineup.csv의 정규화가 전부 원문으로 되돌아간다.
+    """
+    path = base_dir / ARTIST_MAPPING_NAME
+    if not path.exists():
+        return {}
+    try:
+        mapping = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"{path} 를 읽을 수 없습니다: {e}\n"
+            "빈 매핑으로 진행하면 정규화 결과가 사라집니다. 파일을 고치거나 지우세요."
+        )
+    if not isinstance(mapping, dict):
+        raise SystemExit(f"{path} 는 객체여야 합니다")
+    return mapping
+
+
+def save_artist_mapping(base_dir: Path, mapping: dict[str, str]) -> None:
+    """write_csv와 같은 이유로 원자적으로 쓴다 — 읽는 쪽이 반쪽 파일을 보면 안 된다."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    path = base_dir / ARTIST_MAPPING_NAME
+    temp_path = path.parent / f"{path.name}.tmp"
+    try:
+        temp_path.write_text(
+            json.dumps(mapping, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        os.replace(temp_path, path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+
+
 OUTPUT_BASE = Path("output")
 
 

@@ -492,3 +492,25 @@ def test_run_does_not_touch_other_year(tmp_path, monkeypatch):
     crawl.run(2026, base)
 
     assert (other / "festivals.csv").read_text(encoding="utf-8") == "건드리지 마시오"
+
+
+def test_load_artist_mapping_missing_is_empty(tmp_path):
+    assert crawl.load_artist_mapping(tmp_path) == {}
+
+
+def test_save_and_load_artist_mapping_roundtrip(tmp_path):
+    crawl.save_artist_mapping(tmp_path, {"십센치": "10CM"})
+    assert crawl.load_artist_mapping(tmp_path) == {"십센치": "10CM"}
+
+
+def test_load_artist_mapping_corrupt_aborts(tmp_path):
+    """조용히 빈 매핑으로 넘어가면 정규화 결과가 통째로 사라진다 — 반드시 중단해야 한다."""
+    (tmp_path / "artist_mapping.json").write_text("{깨진 JSON", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        crawl.load_artist_mapping(tmp_path)
+
+
+def test_load_artist_mapping_non_object_aborts(tmp_path):
+    (tmp_path / "artist_mapping.json").write_text('["배열은 안 됨"]', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        crawl.load_artist_mapping(tmp_path)
