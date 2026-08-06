@@ -45,11 +45,14 @@ def test_load_data_raises_when_csv_is_mid_write(tmp_path, monkeypatch):
 
 def test_load_data_reads_artists_from_base_dir(tmp_path):
     # artists.csv는 연도 공통이라 out_dir(연도 폴더)이 아니라 base_dir(output/)에 있다.
-    year_dir = tmp_path / "2026"
-    _write(year_dir / "festivals.csv", ["festival_id"], [{"festival_id": "x"}])
-    _write(year_dir / "lineup.csv", ["festival_id"], [{"festival_id": "x"}])
-    _write(tmp_path / "artists.csv", ["artist_canonical"], [{"artist_canonical": "잔나비"}])
-    data = serve.load_data(year_dir, tmp_path)
+    # base_dir을 out_dir.parent와 다른 경로로 둬서, load_data가 base_dir 인자 대신
+    # out_dir.parent를 암묵적으로 계산하는 지름길을 쓰면 반드시 실패하게 만든다.
+    out_dir = tmp_path / "output" / "2026"
+    base_dir = tmp_path / "common"
+    _write(out_dir / "festivals.csv", ["festival_id"], [{"festival_id": "x"}])
+    _write(out_dir / "lineup.csv", ["festival_id"], [{"festival_id": "x"}])
+    _write(base_dir / "artists.csv", ["artist_canonical"], [{"artist_canonical": "잔나비"}])
+    data = serve.load_data(out_dir, base_dir)
     assert data["festivals"] != []
     assert data["lineup"] != []
     assert data["artists"][0]["artist_canonical"] == "잔나비"
