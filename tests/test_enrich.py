@@ -191,3 +191,20 @@ def test_enrich_old_schema_lineup_fails_before_llm(tmp_path, monkeypatch):
     monkeypatch.setattr(enrich, "call_claude", boom)
     with pytest.raises(SystemExit):
         enrich.enrich(tmp_path)
+
+
+def test_enrich_refreshes_lineup_even_when_no_new_names(tmp_path, monkeypatch):
+    # lineup.csv의 artist_canonical은 seed 시점의 원문("십센치")으로 고정된다.
+    _seed_year(tmp_path, 2026, ["십센치"])
+    # 매핑은 이미 그 이름을 다른 정식 표기("10CM")로 갖고 있다 — 예: 사람이 매핑 파일을 손으로 고친 경우.
+    crawl.save_artist_mapping(tmp_path, {"십센치": "10CM"})
+
+    def boom(prompt, timeout=120):
+        raise AssertionError("모든 이름이 매핑에 있으면 LLM을 부르면 안 됨")
+
+    monkeypatch.setattr(enrich, "call_claude", boom)
+    enrich.enrich(tmp_path)   # 예외 없이 종료
+
+    with open(tmp_path / "2026" / "lineup.csv", newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["artist_canonical"] == "10CM"   # 매핑 값으로 갱신됨 (LLM 없이도)

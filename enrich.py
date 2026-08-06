@@ -104,6 +104,19 @@ def _merge_artists(base_dir: Path, artists: list[ArtistMaster]) -> None:
     write_csv(path, ARTIST_FIELDS, rows)
 
 
+def _refresh_lineups(ydirs: list[Path], mapping: dict[str, str]) -> None:
+    """모든 연도의 lineup.csv를 현재 매핑에 맞춰 다시 쓴다 (매핑에 없는 표기는 원문 유지)."""
+    for ydir in ydirs:
+        lineup_path = ydir / "lineup.csv"
+        if not lineup_path.exists():
+            continue
+        with open(lineup_path, newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.DictReader(f))
+        for row in rows:
+            row["artist_canonical"] = mapping.get(row["artist_raw"], row["artist_raw"])
+        write_csv(lineup_path, LINEUP_FIELDS, rows)
+
+
 def enrich(base_dir: Path) -> None:
     names = collect_raw_names(base_dir)
     if not names:
@@ -128,23 +141,19 @@ def enrich(base_dir: Path) -> None:
 
     mapping = load_artist_mapping(base_dir)
     new_names = [n for n in names if n not in mapping]
-    if not new_names:
+
+    result = None
+    if new_names:
+        result = normalize(new_names, sorted(set(mapping.values())))
+        mapping.update(result.mapping)
+        save_artist_mapping(base_dir, mapping)
+
+    # 매핑 값이 손으로 바뀌었을 수도 있으니 새 이름이 없어도 항상 반영한다.
+    _refresh_lineups(ydirs, mapping)
+
+    if result is None:
         print(f"새 아티스트 없음 — 정규화 건너뜀 (매핑 {len(mapping)}건)")
         return
-
-    result = normalize(new_names, sorted(set(mapping.values())))
-    mapping.update(result.mapping)
-    save_artist_mapping(base_dir, mapping)
-
-    for ydir in ydirs:
-        lineup_path = ydir / "lineup.csv"
-        if not lineup_path.exists():
-            continue
-        with open(lineup_path, newline="", encoding="utf-8-sig") as f:
-            rows = list(csv.DictReader(f))
-        for row in rows:
-            row["artist_canonical"] = mapping.get(row["artist_raw"], row["artist_raw"])
-        write_csv(lineup_path, LINEUP_FIELDS, rows)
 
     _merge_artists(base_dir, result.artists)
     print(f"완료: 신규 {len(new_names)}명 정규화, 매핑 누적 {len(mapping)}건, "
