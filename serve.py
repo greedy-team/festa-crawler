@@ -28,11 +28,12 @@ def read_csv(path: Path) -> list[dict]:
         raise CsvUnreadable(f"{path.name}: {e}")
 
 
-def load_data(out_dir: Path) -> dict:
+def load_data(out_dir: Path, base_dir: Path) -> dict:
+    """artists.csv는 연도 공통이라 out_dir(연도 폴더)이 아니라 base_dir(output/)에서 읽는다."""
     return {
         "festivals": read_csv(out_dir / "festivals.csv"),
         "lineup": read_csv(out_dir / "lineup.csv"),
-        "artists": read_csv(out_dir / "artists.csv"),
+        "artists": read_csv(base_dir / "artists.csv"),
     }
 
 
@@ -147,6 +148,7 @@ def parse_from_index(query: str) -> int | None:
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "output"
+BASE_DIR = ROOT / "output"
 ALLOWED: set[str] = set()
 YEAR = 0
 
@@ -170,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, html, "text/html; charset=utf-8")
         if path == "/api/data":
             try:
-                return self._json(200, load_data(OUT_DIR))
+                return self._json(200, load_data(OUT_DIR, BASE_DIR))
             except CsvUnreadable as e:
                 return self._json(503, {"error": str(e)})
         if path == "/api/log":
@@ -210,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global ALLOWED, OUT_DIR, YEAR
+    global ALLOWED, OUT_DIR, BASE_DIR, YEAR
     parser = argparse.ArgumentParser(description="FESTA 검수 페이지 (로컬 전용)")
     parser.add_argument("--year", type=int, required=True, help="검수할 연도")
     parser.add_argument("--port", type=int, default=8765)
@@ -220,7 +222,8 @@ def main() -> None:
     if not seed.exists():
         raise SystemExit(f"{seed} 가 없습니다")
     YEAR = args.year
-    OUT_DIR = ROOT / "output" / str(args.year)
+    BASE_DIR = ROOT / "output"
+    OUT_DIR = BASE_DIR / str(args.year)
     ALLOWED = load_allowed_universities(seed)
 
     # 소켓을 먼저 열고 나서 브라우저를 연다 — 반대 순서면 두 번째 실행이 첫 번째 인스턴스의

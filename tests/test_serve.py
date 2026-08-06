@@ -22,14 +22,14 @@ def test_load_data_reads_three_files(tmp_path):
            [{"festival_id": "연세대학교-2026", "flag": "ok"}])
     _write(tmp_path / "lineup.csv", ["festival_id", "artist_raw"],
            [{"festival_id": "연세대학교-2026", "artist_raw": "잔나비"}])
-    data = serve.load_data(tmp_path)
+    data = serve.load_data(tmp_path, tmp_path)
     assert data["festivals"][0]["flag"] == "ok"
     assert data["lineup"][0]["artist_raw"] == "잔나비"
     assert data["artists"] == []          # enrich 전이면 빈 목록이 정상
 
 
 def test_load_data_all_missing_is_empty(tmp_path):
-    assert serve.load_data(tmp_path) == {"festivals": [], "lineup": [], "artists": []}
+    assert serve.load_data(tmp_path, tmp_path) == {"festivals": [], "lineup": [], "artists": []}
 
 
 def test_load_data_raises_when_csv_is_mid_write(tmp_path, monkeypatch):
@@ -40,7 +40,19 @@ def test_load_data_raises_when_csv_is_mid_write(tmp_path, monkeypatch):
 
     monkeypatch.setattr(serve.csv, "DictReader", boom)
     with pytest.raises(serve.CsvUnreadable):
-        serve.load_data(tmp_path)
+        serve.load_data(tmp_path, tmp_path)
+
+
+def test_load_data_reads_artists_from_base_dir(tmp_path):
+    # artists.csv는 연도 공통이라 out_dir(연도 폴더)이 아니라 base_dir(output/)에 있다.
+    year_dir = tmp_path / "2026"
+    _write(year_dir / "festivals.csv", ["festival_id"], [{"festival_id": "x"}])
+    _write(year_dir / "lineup.csv", ["festival_id"], [{"festival_id": "x"}])
+    _write(tmp_path / "artists.csv", ["artist_canonical"], [{"artist_canonical": "잔나비"}])
+    data = serve.load_data(year_dir, tmp_path)
+    assert data["festivals"] != []
+    assert data["lineup"] != []
+    assert data["artists"][0]["artist_canonical"] == "잔나비"
 
 
 def _never(argv):
