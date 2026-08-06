@@ -2,7 +2,7 @@ from pathlib import Path
 
 from crawl import load_universities
 
-CSV_PATH = Path(__file__).parent.parent / "universities.csv"
+CSV_PATH = Path(__file__).parent.parent / "universities-2026.csv"
 
 
 def test_loads_29_rows():
