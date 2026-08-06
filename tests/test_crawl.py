@@ -120,7 +120,7 @@ def test_build_rows():
     frow = build_festival_row(record)
     assert frow["festival_name"] == "아카라카"
     assert frow["flag"] == "ok"
-    lrows = build_lineup_rows(record)
+    lrows = build_lineup_rows(record, {})
     assert len(lrows) == 2
     assert lrows[0]["artist_canonical"] == "잔나비"   # 초기값 = artist_raw
     assert lrows[1]["is_secret"] == "true"
@@ -133,7 +133,7 @@ def test_build_rows_without_extraction():
     frow = build_festival_row(record)
     assert frow["flag"] == "no_source"
     assert frow["festival_name"] == ""
-    assert build_lineup_rows(record) == []
+    assert build_lineup_rows(record, {}) == []
 
 
 def test_write_csv_utf8_bom(tmp_path):
@@ -352,7 +352,7 @@ def test_festival_id_links_festival_and_lineup():
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
-    lrows = build_lineup_rows(record)
+    lrows = build_lineup_rows(record, {})
     assert frow["festival_id"] == "연세대학교-2026"
     assert [r["festival_id"] for r in lrows] == ["연세대학교-2026"] * 2
     assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
@@ -365,7 +365,7 @@ def test_lineup_rows_drop_denormalized_columns():
               "url": "https://example.com/post", "discovery": "manual",
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
-    lrow = build_lineup_rows(record)[0]
+    lrow = build_lineup_rows(record, {})[0]
     for dropped in ("university", "year", "festival_name"):
         assert dropped not in lrow
 
@@ -492,6 +492,45 @@ def test_run_does_not_touch_other_year(tmp_path, monkeypatch):
     crawl.run(2026, base)
 
     assert (other / "festivals.csv").read_text(encoding="utf-8") == "건드리지 마시오"
+
+
+def test_build_lineup_rows_applies_mapping():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "discovery": "manual",
+              "flag": "ok", "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    lrows = build_lineup_rows(record, {"잔나비": "JANNABI"})
+    assert lrows[0]["artist_canonical"] == "JANNABI"
+    assert lrows[0]["artist_raw"] == "잔나비"     # 원문 표기는 보존
+
+
+def test_build_lineup_rows_falls_back_to_raw_when_unmapped():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "discovery": "manual",
+              "flag": "ok", "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    lrows = build_lineup_rows(record, {})
+    assert lrows[0]["artist_canonical"] == "잔나비"
+
+
+def test_rerun_keeps_normalized_names(tmp_path, monkeypatch):
+    """이슈 #14의 회귀 방어 — crawl을 다시 돌려도 정규화가 유지되어야 한다."""
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "output"
+    _write_seed(tmp_path, 2026, [_seed_row(url="https://example.com/post")])
+    crawl.save_artist_mapping(base, {"잔나비": "JANNABI"})
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+
+    crawl.run(2026, base)
+    crawl.run(2026, base)          # 재실행 — 여기서 지워지면 안 된다
+
+    with open(base / "2026" / "lineup.csv", newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["artist_canonical"] == "JANNABI"
 
 
 def test_load_artist_mapping_missing_is_empty(tmp_path):

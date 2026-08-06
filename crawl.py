@@ -152,20 +152,25 @@ def build_festival_row(record: dict) -> dict:
     }
 
 
-def build_lineup_rows(record: dict) -> list[dict]:
+def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
+    """라인업 행을 만든다. artist_canonical은 매핑에서 채운다 — 매핑에 없으면 원문 그대로.
+
+    매핑을 여기서 적용하기 때문에 crawl을 몇 번 다시 돌려도 정규화가 복원된다.
+    """
     ext = record["extraction"]
     if not ext:
         return []
     fid = festival_id(record["university"], record["year"])
     rows = []
     for item in ext["lineup"]:
+        raw = item["artist_raw"]
         rows.append({
             "festival_id": fid,
             "day_label": item.get("day_label") or "",
             "date": item.get("date") or "",
             "time": item.get("time") or "",
-            "artist_canonical": item["artist_raw"],   # enrich가 갱신
-            "artist_raw": item["artist_raw"],
+            "artist_canonical": mapping.get(raw, raw),
+            "artist_raw": raw,
             "is_secret": "true" if item.get("is_secret") else "false",
             "source_url": record["url"] or "",
         })
@@ -269,6 +274,7 @@ def run(year: int, base_dir: Path = OUTPUT_BASE, limit: int | None = None) -> No
 
     out_dir = base_dir / str(year)
     out_dir.mkdir(parents=True, exist_ok=True)
+    mapping = load_artist_mapping(base_dir)
 
     festival_rows, lineup_rows = [], []
     for i, row in enumerate(rows, 1):
@@ -276,7 +282,7 @@ def run(year: int, base_dir: Path = OUTPUT_BASE, limit: int | None = None) -> No
         record = process_row(row, out_dir)
         print(f"  -> {record['flag']}", flush=True)
         festival_rows.append(build_festival_row(record))
-        lineup_rows.extend(build_lineup_rows(record))
+        lineup_rows.extend(build_lineup_rows(record, mapping))
     write_csv(out_dir / "festivals.csv", FESTIVAL_FIELDS, festival_rows)
     write_csv(out_dir / "lineup.csv", LINEUP_FIELDS, lineup_rows)
     print(f"완료: festivals {len(festival_rows)}행, lineup {len(lineup_rows)}행")
