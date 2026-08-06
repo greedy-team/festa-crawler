@@ -6,9 +6,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from crawl import LINEUP_FIELDS, write_csv
+from crawl import (LINEUP_FIELDS, OUTPUT_BASE, load_artist_mapping,
+                   save_artist_mapping, write_csv)
 from extract import ExtractError, _extract_json, call_claude
-from schema import EnrichResult
+from schema import ArtistMaster, EnrichResult
 
 ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
                  "aliases", "needs_review"]
@@ -29,26 +30,46 @@ PROMPT_TEMPLATE = """다음은 대학 축제 라인업에서 추출한 아티스
 {{"mapping": {{"원문표기": "정식표기"}},
   "artists": [{{"name_canonical": str, "name_en": str|null, "real_name": str|null,
                "category": str|null, "aliases": [str], "needs_review": bool}}]}}
-
+{known_block}
 아티스트 표기 목록:
 {names}"""
 
+KNOWN_BLOCK_TEMPLATE = """
+이미 정해 둔 정식 표기입니다. 아래 목록에 있는 아티스트와 같은 사람이면
+그 표기를 그대로 쓰세요 (새 표기를 만들지 마세요):
+{known}
+"""
 
-def collect_raw_names(out_dir: Path) -> list[str]:
+
+def year_dirs(base_dir: Path) -> list[Path]:
+    """output/ 아래의 연도 폴더들. 숫자 이름만 연도로 본다."""
+    if not base_dir.exists():
+        return []
+    return sorted(p for p in base_dir.iterdir() if p.is_dir() and p.name.isdigit())
+
+
+def collect_raw_names(base_dir: Path) -> list[str]:
+    """전 연도의 raw 캐시에서 아티스트 원문 표기를 모은다. is_secret은 제외한다."""
     names: set[str] = set()
-    for path in sorted((out_dir / "raw").glob("*.json")):
-        record = json.loads(path.read_text(encoding="utf-8"))
-        ext = record.get("extraction")
-        if not ext:
-            continue
-        for item in ext["lineup"]:
-            if not item.get("is_secret"):
-                names.add(item["artist_raw"])
+    for ydir in year_dirs(base_dir):
+        for path in sorted((ydir / "raw").glob("*.json")):
+            record = json.loads(path.read_text(encoding="utf-8"))
+            ext = record.get("extraction")
+            if not ext:
+                continue
+            for item in ext["lineup"]:
+                if not item.get("is_secret"):
+                    names.add(item["artist_raw"])
     return sorted(names)
 
 
-def normalize(names: list[str]) -> EnrichResult:
-    prompt = PROMPT_TEMPLATE.format(names="\n".join(f"- {n}" for n in names))
+def normalize(names: list[str], known: list[str]) -> EnrichResult:
+    known_block = (
+        KNOWN_BLOCK_TEMPLATE.format(known="\n".join(f"- {k}" for k in known))
+        if known else ""
+    )
+    prompt = PROMPT_TEMPLATE.format(
+        names="\n".join(f"- {n}" for n in names), known_block=known_block)
     last_error = None
     for attempt in range(2):
         raw = call_claude(prompt, timeout=ENRICH_TIMEOUT_SECONDS)
@@ -60,51 +81,77 @@ def normalize(names: list[str]) -> EnrichResult:
     raise ExtractError(f"정규화 검증 2회 실패: {last_error}")
 
 
-def enrich(out_dir: Path) -> None:
-    names = collect_raw_names(out_dir)
+def _merge_artists(base_dir: Path, artists: list[ArtistMaster]) -> None:
+    """기존 artists.csv를 유지하고 새 아티스트만 덧붙인다 — 연도 사이에 누적된다."""
+    path = base_dir / "artists.csv"
+    rows: list[dict] = []
+    if path.exists():
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            rows = list(csv.DictReader(f))
+    known = {r["name_canonical"] for r in rows}
+    for a in artists:
+        if a.name_canonical in known:
+            continue
+        rows.append({
+            "name_canonical": a.name_canonical,
+            "name_en": a.name_en or "",
+            "real_name": a.real_name or "",
+            "category": a.category or "",
+            "aliases": ";".join(a.aliases),
+            "needs_review": "true" if a.needs_review else "false",
+        })
+        known.add(a.name_canonical)
+    write_csv(path, ARTIST_FIELDS, rows)
+
+
+def enrich(base_dir: Path) -> None:
+    names = collect_raw_names(base_dir)
     if not names:
         print("정규화할 아티스트 없음 — 건너뜀")
         return
 
+    ydirs = year_dirs(base_dir)
+
     # lineup.csv 스키마를 LLM 호출 전에 검증한다 — normalize()는 578초짜리 LLM 호출이라,
     # 구 스키마(festival_id 없음)로 뒤늦게 write_csv에서 실패하면 그 호출이 통째로 낭비된다.
-    lineup_path = out_dir / "lineup.csv"
-    if lineup_path.exists():
+    for ydir in ydirs:
+        lineup_path = ydir / "lineup.csv"
+        if not lineup_path.exists():
+            continue
         with open(lineup_path, newline="", encoding="utf-8-sig") as f:
             header = csv.DictReader(f).fieldnames
         if header != LINEUP_FIELDS:
             raise SystemExit(
-                "lineup.csv가 예전 스키마입니다 (festival_id 없음) — "
+                f"{lineup_path} 가 예전 스키마입니다 (festival_id 없음) — "
                 "crawl.py를 먼저 다시 실행해 새 스키마로 재생성하세요."
             )
 
-    result = normalize(names)
+    mapping = load_artist_mapping(base_dir)
+    new_names = [n for n in names if n not in mapping]
+    if not new_names:
+        print(f"새 아티스트 없음 — 정규화 건너뜀 (매핑 {len(mapping)}건)")
+        return
 
-    # lineup.csv의 artist_canonical 갱신 (매핑에 없는 표기는 원문 유지)
-    if lineup_path.exists():
+    result = normalize(new_names, sorted(set(mapping.values())))
+    mapping.update(result.mapping)
+    save_artist_mapping(base_dir, mapping)
+
+    for ydir in ydirs:
+        lineup_path = ydir / "lineup.csv"
+        if not lineup_path.exists():
+            continue
         with open(lineup_path, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.DictReader(f))
         for row in rows:
-            row["artist_canonical"] = result.mapping.get(
-                row["artist_raw"], row["artist_raw"]
-            )
+            row["artist_canonical"] = mapping.get(row["artist_raw"], row["artist_raw"])
         write_csv(lineup_path, LINEUP_FIELDS, rows)
 
-    artist_rows = [{
-        "name_canonical": a.name_canonical,
-        "name_en": a.name_en or "",
-        "real_name": a.real_name or "",
-        "category": a.category or "",
-        "aliases": ";".join(a.aliases),
-        "needs_review": "true" if a.needs_review else "false",
-    } for a in result.artists]
-    write_csv(out_dir / "artists.csv", ARTIST_FIELDS, artist_rows)
-    print(f"완료: artists {len(artist_rows)}행, needs_review "
-          f"{sum(1 for a in result.artists if a.needs_review)}건")
+    _merge_artists(base_dir, result.artists)
+    print(f"완료: 신규 {len(new_names)}명 정규화, 매핑 누적 {len(mapping)}건, "
+          f"needs_review {sum(1 for a in result.artists if a.needs_review)}건")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="아티스트 정규화/마스터 생성")
-    parser.add_argument("--output-dir", type=Path, default=Path("output"))
-    args = parser.parse_args()
-    enrich(args.output_dir)
+    parser.parse_args()
+    enrich(OUTPUT_BASE)
