@@ -43,7 +43,7 @@ def test_load_data_raises_when_csv_is_mid_write(tmp_path, monkeypatch):
         serve.load_data(tmp_path)
 
 
-def _never(script):
+def _never(argv):
     raise AssertionError("검증에 실패한 요청은 잡을 시작하면 안 됨")
 
 
@@ -60,14 +60,16 @@ def test_allowed_universities_from_seed(tmp_path):
 
 
 def test_run_rejects_unknown_job(tmp_path):
-    status, body = serve.handle_run({"job": "rm"}, tmp_path, {"연세대학교"}, start=_never)
+    status, body = serve.handle_run(
+        {"job": "rm"}, tmp_path, {"연세대학교"}, start=_never, year=2026)
     assert status == 400
     assert "job" in body["error"]
 
 
 def test_run_rejects_university_not_in_seed(tmp_path):
     status, body = serve.handle_run(
-        {"job": "crawl", "university": "없는대학교"}, tmp_path, {"연세대학교"}, start=_never)
+        {"job": "crawl", "university": "없는대학교"}, tmp_path, {"연세대학교"}, start=_never,
+        year=2026)
     assert status == 400
 
 
@@ -77,14 +79,16 @@ def test_run_rejects_path_traversal_without_touching_files(tmp_path):
     victim = out / "victim.json"          # out/raw/../victim.json 이 가리키는 곳
     victim.write_text("{}", encoding="utf-8")
     status, body = serve.handle_run(
-        {"job": "crawl", "university": "../victim"}, out, {"연세대학교"}, start=_never)
+        {"job": "crawl", "university": "../victim"}, out, {"연세대학교"}, start=_never,
+        year=2026)
     assert status == 400
     assert victim.exists()                # 경로 조립에 도달하지 않았다
 
 
 def test_run_rejects_university_with_enrich(tmp_path):
     status, body = serve.handle_run(
-        {"job": "enrich", "university": "연세대학교"}, tmp_path, {"연세대학교"}, start=_never)
+        {"job": "enrich", "university": "연세대학교"}, tmp_path, {"연세대학교"}, start=_never,
+        year=2026)
     assert status == 400
 
 
@@ -96,15 +100,15 @@ def test_run_clears_raw_cache_only(tmp_path):
     (out / "discovered" / "연세대학교.json").write_text("{}", encoding="utf-8")
     started = []
 
-    def start(script):
-        started.append(script)
+    def start(argv):
+        started.append(argv)
         return True
 
     status, body = serve.handle_run(
         {"job": "crawl", "university": "연세대학교"}, out, {"연세대학교"},
-        start=start)
+        start=start, year=2026)
     assert status == 200
-    assert started == ["crawl.py"]
+    assert started == [["crawl.py", "--year", "2026"]]
     assert not (out / "raw" / "연세대학교.json").exists()
     assert (out / "discovered" / "연세대학교.json").exists()   # 탐색 캐시는 유지
 
@@ -117,7 +121,7 @@ def test_run_rediscover_clears_both_caches(tmp_path):
     (out / "discovered" / "연세대학교.json").write_text("{}", encoding="utf-8")
     status, _ = serve.handle_run(
         {"job": "crawl", "university": "연세대학교", "rediscover": True}, out,
-        {"연세대학교"}, start=lambda script: True)
+        {"연세대학교"}, start=lambda argv: True, year=2026)
     assert status == 200
     assert not (out / "raw" / "연세대학교.json").exists()
     assert not (out / "discovered" / "연세대학교.json").exists()
@@ -128,13 +132,14 @@ def test_run_missing_cache_files_is_fine(tmp_path):
     out.mkdir()
     status, _ = serve.handle_run(
         {"job": "crawl", "university": "연세대학교", "rediscover": True}, out,
-        {"연세대학교"}, start=lambda script: True)
+        {"연세대학교"}, start=lambda argv: True, year=2026)
     assert status == 200          # 파일이 없어도 예외 없이 통과
 
 
 def test_run_conflicts_while_job_running(tmp_path, monkeypatch):
     monkeypatch.setattr(serve.JOB, "running", lambda: True)
-    status, body = serve.handle_run({"job": "crawl"}, tmp_path, set(), start=_never)
+    status, body = serve.handle_run(
+        {"job": "crawl"}, tmp_path, set(), start=_never, year=2026)
     assert status == 409
 
 
@@ -142,7 +147,7 @@ def test_run_conflicts_when_start_loses_race(tmp_path):
     # running()은 False를 보고했지만 start()가 실제 시작 시점에 경합에서 졌다고 보고하는 경우.
     # start()의 반환값이 최종 판정이어야 한다.
     status, body = serve.handle_run(
-        {"job": "crawl"}, tmp_path, set(), start=lambda script: False)
+        {"job": "crawl"}, tmp_path, set(), start=lambda argv: False, year=2026)
     assert status == 409
 
 
@@ -185,3 +190,29 @@ def test_parse_from_index_non_numeric_is_none():
 
 def test_parse_from_index_empty_value_is_zero():
     assert serve.parse_from_index("from=") == 0
+
+
+def test_run_passes_year_to_crawl(tmp_path):
+    started = []
+
+    def start(argv):
+        started.append(argv)
+        return True
+
+    status, _ = serve.handle_run(
+        {"job": "crawl"}, tmp_path, set(), start=start, year=2027)
+    assert status == 200
+    assert started == [["crawl.py", "--year", "2027"]]
+
+
+def test_run_enrich_gets_no_year(tmp_path):
+    started = []
+
+    def start(argv):
+        started.append(argv)
+        return True
+
+    status, _ = serve.handle_run(
+        {"job": "enrich"}, tmp_path, set(), start=start, year=2027)
+    assert status == 200
+    assert started == [["enrich.py"]]
