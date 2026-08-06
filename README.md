@@ -158,16 +158,22 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 터미널에서 직접 부를 수도 있다. 화면 없이 배치로 돌리거나 `--limit`으로 스모크할 때 쓴다.
 
 ```bash
-.venv/bin/python crawl.py [--limit N]   # --limit: 앞에서 N행만 처리 (스모크용)
-.venv/bin/python enrich.py              # crawl 완료 후 실행
-.venv/bin/python serve.py               # admin.sh 없이 서버만 직접 띄울 때
+.venv/bin/python crawl.py --year 2026 [--limit N]   # --limit: 앞에서 N행만 처리 (스모크용)
+.venv/bin/python enrich.py                          # crawl 완료 후 실행
+.venv/bin/python serve.py --year 2026               # admin.sh 없이 서버만 직접 띄울 때
 ```
 
-`crawl.py`가 `output/festivals.csv`·`output/lineup.csv`를, `enrich.py`가 `output/artists.csv`를
-만든다. 화면의 버튼이 실행하는 것도 정확히 이 두 명령이다.
+`crawl.py`가 `output/<연도>/festivals.csv`·`output/<연도>/lineup.csv`를, `enrich.py`가
+`output/artists.csv`를 만든다. `artists.csv`는 연도 공통이다 — 시즌이 바뀌어도 새로 만들지
+않고 계속 누적된다. 화면의 버튼이 실행하는 것도 정확히 이 두 명령이다.
+
+**아티스트 정규화 매핑.** `enrich.py`가 만드는 `output/artist_mapping.json`은 `artist_raw` →
+`artist_canonical` 대응을 연도 공통으로 누적한다. `crawl.py`는 실행할 때마다 이 매핑을 읽어
+`lineup.csv`의 `artist_canonical`을 채우므로, `crawl.py`를 다시 돌려도 이미 정규화된 표기가
+원문으로 되돌아가지 않는다.
 
 **스키마 변경 시 재생성.** `festival_id` 컬럼 도입(#9) 이전에 만든 `output/`가 남아 있다면
-새 스키마와 맞지 않는다 — `crawl.py`를 한 번 다시 실행해 재생성한다. `output/raw/*.json`
+새 스키마와 맞지 않는다 — `crawl.py`를 한 번 다시 실행해 재생성한다. `output/<연도>/raw/*.json`
 캐시가 남아 있으면 캐시 히트만 일어나 LLM 호출 없이 빠르게 끝난다.
 
 **소요 시간.** 캐시가 빈 상태에서 29곳 전체를 돌면 30~50분 걸린다. 대부분이 LLM 호출 대기
@@ -261,22 +267,23 @@ CSV 재생성까지 따라온다.
 
 캐시는 두 종류다.
 
-**수집·추출 결과** — `output/raw/<대학명>.json`. `universities.csv`의 **`url`과 `year`가
+**수집·추출 결과** — `output/<연도>/raw/<대학명>.json`. `universities.csv`의 **`url`과 `year`가
 그대로면** 캐시를 반환하고 재수집하지 않는다. 둘 중 하나라도 바뀌면 캐시를 무시하고 다시
 처리한다. 검색으로 찾은 URL이 아니라 **시드에 적힌 URL**이 판정 기준이라, 검색으로 채운
 대학도 시드가 그대로면 재실행 때 검색을 반복하지 않는다.
 
-**검색 후보 목록** — `output/discovered/<대학명>.json`. 연도가 같으면 재사용한다. 검색 1건이
-60초 이상 걸리기 때문에 이 캐시가 없으면 재실행 비용이 크다.
+**검색 후보 목록** — `output/<연도>/discovered/<대학명>.json`. 연도가 같으면 재사용한다. 검색
+1건이 60초 이상 걸리기 때문에 이 캐시가 없으면 재실행 비용이 크다.
 
-- **강제 재수집하려면** 해당 대학의 `output/raw/<대학명>.json`을 지우고 다시 실행한다.
-  검색까지 다시 하려면 `output/discovered/<대학명>.json`도 함께 지운다.
+- **강제 재수집하려면** 해당 대학의 `output/<연도>/raw/<대학명>.json`을 지우고 다시 실행한다.
+  검색까지 다시 하려면 `output/<연도>/discovered/<대학명>.json`도 함께 지운다.
 - `fetch_failed`와 `extract_failed`는 캐시에 저장되지 않는다 — 네트워크 오류나 LLM 호출 실패
   같은 일시적 문제를 영구히 굳히지 않기 위함이다. `empty_body`·`mismatch`·성공 결과는 캐시된다.
-- **`year`를 다음 시즌으로 올릴 때** — 시드 URL이 이전 연도 글을 가리키면 캐시가 무효화돼
-  다시 처리되는데, 그 URL은 verify에서 걸러지기 전에 추출 LLM 호출을 1건 쓴다. 시드 URL
-  21건이 전부 이전 연도 글이라면 21건의 회피 가능한 LLM 호출이다. `year`를 올릴 때
-  `universities.csv`의 `url` 컬럼도 함께 비우면 그 호출 없이 곧장 사이트맵 단계로 넘어간다.
+- **새 시즌을 시작할 때** — 지난 시즌 시드는 그대로 두고 `universities-<연도>.csv`를 새로
+  만든다. 이때 `url` 컬럼은 비워 둔다. 지난 시즌 URL을 그대로 채워 넣으면 죽은 링크라도
+  그 URL은 verify에서 걸러지기 전에 추출 LLM 호출을 1건 쓴다 — 시드 URL 21건이 전부
+  이전 연도 글이라면 21건의 회피 가능한 LLM 호출이다. `url` 컬럼을 비워 두면 그 호출 없이
+  곧장 사이트맵 단계로 넘어간다.
 
 ## 운영 팁
 
