@@ -430,3 +430,65 @@ def test_process_row_transient_discovery_failure_after_sitemap_miss(tmp_path, mo
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_source"
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
+
+
+def _write_seed(dir_path: Path, year: int, rows: list[dict]) -> Path:
+    path = dir_path / f"universities-{year}.csv"
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(
+            f, fieldnames=["university", "campus", "region", "year", "url"])
+        w.writeheader()
+        w.writerows(rows)
+    return path
+
+
+def _seed_row(year: int = 2026, url: str = "") -> dict:
+    return {"university": "연세대학교", "campus": "신촌캠퍼스",
+            "region": "서울 서대문구", "year": str(year), "url": url}
+
+
+def test_run_writes_into_year_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    base = tmp_path / "output"
+
+    crawl.run(2026, base)
+
+    assert (base / "2026" / "festivals.csv").exists()
+    assert (base / "2026" / "lineup.csv").exists()
+    assert not (base / "festivals.csv").exists()
+
+
+def test_run_rejects_year_mismatch_in_seed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2027, [_seed_row(year=2026)])   # 파일명은 2027, 내용은 2026
+
+    with pytest.raises(SystemExit) as e:
+        crawl.run(2027, tmp_path / "output")
+    assert "2026" in str(e.value)
+
+
+def test_run_missing_seed_lists_available(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+
+    with pytest.raises(SystemExit) as e:
+        crawl.run(2027, tmp_path / "output")
+    assert "universities-2026.csv" in str(e.value)
+
+
+def test_run_does_not_touch_other_year(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "output"
+    other = base / "2027"
+    other.mkdir(parents=True)
+    (other / "festivals.csv").write_text("건드리지 마시오", encoding="utf-8")
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+
+    crawl.run(2026, base)
+
+    assert (other / "festivals.csv").read_text(encoding="utf-8") == "건드리지 마시오"

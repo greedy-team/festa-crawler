@@ -202,10 +202,33 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
         raise
 
 
-def run(input_csv: Path, out_dir: Path, limit: int | None = None) -> None:
-    rows = load_universities(input_csv)
+OUTPUT_BASE = Path("output")
+
+
+def seed_path(year: int) -> Path:
+    """그 해의 시드 파일. 지난 시즌 시드는 동결되므로 연도마다 파일이 하나씩 늘어난다."""
+    return Path(f"universities-{year}.csv")
+
+
+def run(year: int, base_dir: Path = OUTPUT_BASE, limit: int | None = None) -> None:
+    seed = seed_path(year)
+    if not seed.exists():
+        available = sorted(p.name for p in Path(".").glob("universities-*.csv"))
+        raise SystemExit(
+            f"{seed} 가 없습니다. 있는 시드: {', '.join(available) or '없음'}"
+        )
+    rows = load_universities(seed)
+    wrong = sorted({r.year for r in rows if r.year != year})
+    if wrong:
+        raise SystemExit(
+            f"{seed} 의 year 컬럼에 {wrong} 가 있습니다 — --year {year} 와 다릅니다"
+        )
     if limit:
         rows = rows[:limit]
+
+    out_dir = base_dir / str(year)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     festival_rows, lineup_rows = [], []
     for i, row in enumerate(rows, 1):
         print(f"[{i}/{len(rows)}] {row.university} ...", flush=True)
@@ -220,8 +243,8 @@ def run(input_csv: Path, out_dir: Path, limit: int | None = None) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FESTA 크롤러 v1")
-    parser.add_argument("--input", type=Path, default=Path("universities.csv"))
-    parser.add_argument("--output-dir", type=Path, default=Path("output"))
+    parser.add_argument("--year", type=int, required=True,
+                        help="대상 연도. universities-<연도>.csv 를 읽어 output/<연도>/ 에 쓴다")
     parser.add_argument("--limit", type=int, default=None, help="앞에서 N행만 처리 (스모크용)")
     args = parser.parse_args()
-    run(args.input, args.output_dir, args.limit)
+    run(args.year, limit=args.limit)
