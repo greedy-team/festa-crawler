@@ -8,10 +8,13 @@ CSV로 만드는 **로컬 배치 크롤러**입니다. 서버가 아니라 손�
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python crawl.py [--limit N]   # 수집·추출 → output/festivals.csv, output/lineup.csv
-.venv/bin/python enrich.py              # 아티스트 표기 정규화 → output/artists.csv
-.venv/bin/python -m pytest              # 테스트
+.venv/bin/python crawl.py --year 2026 [--limit N]   # 수집·추출 → output/2026/festivals.csv, output/2026/lineup.csv
+.venv/bin/python enrich.py                          # 아티스트 표기 정규화 (전 연도) → output/artists.csv, output/artist_mapping.json
+.venv/bin/python -m pytest                          # 테스트
 ```
+
+산출물은 `output/<연도>/` 아래에 연도별로 나뉘고, 연도 공통인 `artists.csv`·
+`artist_mapping.json`만 `output/` 바로 아래에 둡니다.
 
 LLM 추출은 로컬 Claude Code CLI(`claude`)를 헤드리스로 호출합니다 — 실행 전 `claude`
 로그인이 되어 있어야 합니다.
@@ -67,7 +70,7 @@ Codex는 `AGENTS.md`와 `.agents/skills/`만 자동으로 읽습니다. `.claude
 | `extract.py` | `claude -p` 추출 (검증 + 재시도 + 역방향 검증) |
 | `enrich.py` | 아티스트 표기 정규화, 아티스트 마스터 생성 (LLM 1콜 후처리) |
 | `schema.py` | pydantic 스키마 |
-| `universities.csv` | 대학 29곳 시드 (URL 포함) |
+| `universities-<연도>.csv` | 그 해의 대학 29곳 시드 (URL 포함). 현재 `universities-2026.csv` |
 
 동작 세부(flag 의미, 캐시 규칙, 운영 팁)는 [`README.md`](./README.md)에,
 설계 근거는 [`2026-08-04-crawler-pipeline-design.md`](./2026-08-04-crawler-pipeline-design.md)에 있습니다.

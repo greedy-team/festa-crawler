@@ -1,4 +1,4 @@
-"""검수 페이지 로컬 서버: output/의 CSV를 브라우저에 보여주고 crawl·enrich를 띄운다.
+"""검수 페이지 로컬 서버: output/<연도>/의 CSV를 브라우저에 보여주고 crawl·enrich를 띄운다.
 
 읽기 전용이다 — output/에 쓰는 주체는 crawl.py와 enrich.py뿐이다.
 """
@@ -28,11 +28,12 @@ def read_csv(path: Path) -> list[dict]:
         raise CsvUnreadable(f"{path.name}: {e}")
 
 
-def load_data(out_dir: Path) -> dict:
+def load_data(out_dir: Path, base_dir: Path) -> dict:
+    """artists.csv는 연도 공통이라 out_dir(연도 폴더)이 아니라 base_dir(output/)에서 읽는다."""
     return {
         "festivals": read_csv(out_dir / "festivals.csv"),
         "lineup": read_csv(out_dir / "lineup.csv"),
-        "artists": read_csv(out_dir / "artists.csv"),
+        "artists": read_csv(base_dir / "artists.csv"),
     }
 
 
@@ -51,19 +52,19 @@ class Job:
         with self._lock:
             return self._proc is not None and self._proc.poll() is None
 
-    def start(self, script: str, cwd: Path) -> bool:
+    def start(self, argv: list[str], cwd: Path) -> bool:
         """확인과 시작을 락 하나로 묶는다 — 그래야 두 요청이 동시에 잡을 못 띄운다.
         경합에서 졌으면 False."""
         with self._lock:
             if self._proc is not None and self._proc.poll() is None:
                 return False
             proc = subprocess.Popen(
-                [sys.executable, script], cwd=str(cwd),
+                [sys.executable, *argv], cwd=str(cwd),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
             )
             self._proc = proc
-            self._lines = [f"$ {sys.executable} {script}"]
+            self._lines = [f"$ {sys.executable} {' '.join(argv)}"]
         threading.Thread(target=self._pump, args=(proc,), daemon=True).start()
         return True
 
@@ -102,8 +103,9 @@ def clear_cache(out_dir: Path, university: str, rediscover: bool) -> None:
         (out_dir / "discovered" / f"{university}.json").unlink(missing_ok=True)
 
 
-def handle_run(payload: dict, out_dir: Path, allowed: set[str], start) -> tuple[int, dict]:
-    """POST /api/run 의 순수 로직. start(script) 는 잡 시작 함수다."""
+def handle_run(payload: dict, out_dir: Path, allowed: set[str], start,
+               year: int) -> tuple[int, dict]:
+    """POST /api/run 의 순수 로직. start(argv) 는 잡 시작 함수다."""
     job = payload.get("job")
     if job not in JOB_SCRIPTS:
         return 400, {"error": f"알 수 없는 job: {job!r}"}
@@ -122,7 +124,10 @@ def handle_run(payload: dict, out_dir: Path, allowed: set[str], start) -> tuple[
     if university is not None:
         clear_cache(out_dir, university, bool(payload.get("rediscover")))
 
-    if not start(JOB_SCRIPTS[job]):
+    argv = [JOB_SCRIPTS[job]]
+    if job == "crawl":
+        argv += ["--year", str(year)]
+    if not start(argv):
         return 409, {"error": "이미 실행 중입니다"}
     return 200, {"started": job, "university": university}
 
@@ -143,7 +148,9 @@ def parse_from_index(query: str) -> int | None:
 
 ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "output"
+BASE_DIR = ROOT / "output"
 ALLOWED: set[str] = set()
+YEAR = 0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -165,7 +172,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, html, "text/html; charset=utf-8")
         if path == "/api/data":
             try:
-                return self._json(200, load_data(OUT_DIR))
+                return self._json(200, load_data(OUT_DIR, BASE_DIR))
             except CsvUnreadable as e:
                 return self._json(503, {"error": str(e)})
         if path == "/api/log":
@@ -198,25 +205,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def _run(self, payload: dict) -> tuple[int, dict]:
         return handle_run(payload, OUT_DIR, ALLOWED,
-                          start=lambda script: JOB.start(script, ROOT))
+                          start=lambda argv: JOB.start(argv, ROOT), year=YEAR)
 
     def log_message(self, fmt, *args) -> None:
         pass          # 접근 로그는 잡 로그를 가린다
 
 
 def main() -> None:
-    global ALLOWED
+    global ALLOWED, OUT_DIR, BASE_DIR, YEAR
     parser = argparse.ArgumentParser(description="FESTA 검수 페이지 (로컬 전용)")
+    parser.add_argument("--year", type=int, required=True, help="검수할 연도")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
 
-    ALLOWED = load_allowed_universities(ROOT / "universities.csv")
+    seed = ROOT / f"universities-{args.year}.csv"
+    if not seed.exists():
+        raise SystemExit(f"{seed} 가 없습니다")
+    YEAR = args.year
+    BASE_DIR = ROOT / "output"
+    OUT_DIR = BASE_DIR / str(args.year)
+    ALLOWED = load_allowed_universities(seed)
 
     # 소켓을 먼저 열고 나서 브라우저를 연다 — 반대 순서면 두 번째 실행이 첫 번째 인스턴스의
     # 탭을 열어놓고서 "Address already in use"로 죽는다.
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{args.port}/"
-    print(f"검수 페이지: {url}  (Ctrl+C로 종료)")
+    print(f"검수 페이지({args.year}): {url}  (Ctrl+C로 종료)")
     webbrowser.open(url)
     server.serve_forever()
 

@@ -120,7 +120,7 @@ def test_build_rows():
     frow = build_festival_row(record)
     assert frow["festival_name"] == "아카라카"
     assert frow["flag"] == "ok"
-    lrows = build_lineup_rows(record)
+    lrows = build_lineup_rows(record, {})
     assert len(lrows) == 2
     assert lrows[0]["artist_canonical"] == "잔나비"   # 초기값 = artist_raw
     assert lrows[1]["is_secret"] == "true"
@@ -133,7 +133,7 @@ def test_build_rows_without_extraction():
     frow = build_festival_row(record)
     assert frow["flag"] == "no_source"
     assert frow["festival_name"] == ""
-    assert build_lineup_rows(record) == []
+    assert build_lineup_rows(record, {}) == []
 
 
 def test_write_csv_utf8_bom(tmp_path):
@@ -352,7 +352,7 @@ def test_festival_id_links_festival_and_lineup():
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
-    lrows = build_lineup_rows(record)
+    lrows = build_lineup_rows(record, {})
     assert frow["festival_id"] == "연세대학교-2026"
     assert [r["festival_id"] for r in lrows] == ["연세대학교-2026"] * 2
     assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
@@ -365,7 +365,7 @@ def test_lineup_rows_drop_denormalized_columns():
               "url": "https://example.com/post", "discovery": "manual",
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
-    lrow = build_lineup_rows(record)[0]
+    lrow = build_lineup_rows(record, {})[0]
     for dropped in ("university", "year", "festival_name"):
         assert dropped not in lrow
 
@@ -430,3 +430,162 @@ def test_process_row_transient_discovery_failure_after_sitemap_miss(tmp_path, mo
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_source"
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
+
+
+def _write_seed(dir_path: Path, year: int, rows: list[dict]) -> Path:
+    path = dir_path / f"universities-{year}.csv"
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(
+            f, fieldnames=["university", "campus", "region", "year", "url"])
+        w.writeheader()
+        w.writerows(rows)
+    return path
+
+
+def _seed_row(year: int = 2026, url: str = "") -> dict:
+    return {"university": "연세대학교", "campus": "신촌캠퍼스",
+            "region": "서울 서대문구", "year": str(year), "url": url}
+
+
+def test_run_writes_into_year_folder(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    base = tmp_path / "output"
+
+    crawl.run(2026, base)
+
+    assert (base / "2026" / "festivals.csv").exists()
+    assert (base / "2026" / "lineup.csv").exists()
+    assert not (base / "festivals.csv").exists()
+
+
+def test_run_rejects_year_mismatch_in_seed(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2027, [_seed_row(year=2026)])   # 파일명은 2027, 내용은 2026
+
+    with pytest.raises(SystemExit) as e:
+        crawl.run(2027, tmp_path / "output")
+    assert "2026" in str(e.value)
+
+
+def test_run_missing_seed_lists_available(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+
+    with pytest.raises(SystemExit) as e:
+        crawl.run(2027, tmp_path / "output")
+    assert "universities-2026.csv" in str(e.value)
+
+
+def test_run_does_not_touch_other_year(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "output"
+    other = base / "2027"
+    other.mkdir(parents=True)
+    (other / "festivals.csv").write_text("건드리지 마시오", encoding="utf-8")
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+
+    crawl.run(2026, base)
+
+    assert (other / "festivals.csv").read_text(encoding="utf-8") == "건드리지 마시오"
+
+
+def test_build_lineup_rows_applies_mapping():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "discovery": "manual",
+              "flag": "ok", "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    lrows = build_lineup_rows(record, {"잔나비": "JANNABI"})
+    assert lrows[0]["artist_canonical"] == "JANNABI"
+    assert lrows[0]["artist_raw"] == "잔나비"     # 원문 표기는 보존
+
+
+def test_build_lineup_rows_falls_back_to_raw_when_unmapped():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "discovery": "manual",
+              "flag": "ok", "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    lrows = build_lineup_rows(record, {})
+    assert lrows[0]["artist_canonical"] == "잔나비"
+
+
+def test_rerun_keeps_normalized_names(tmp_path, monkeypatch):
+    """이슈 #14의 회귀 방어 — crawl을 다시 돌려도 정규화가 유지되어야 한다."""
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "output"
+    _write_seed(tmp_path, 2026, [_seed_row(url="https://example.com/post")])
+    crawl.save_artist_mapping(base, {"잔나비": "JANNABI"})
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+
+    crawl.run(2026, base)
+    crawl.run(2026, base)          # 재실행 — 여기서 지워지면 안 된다
+
+    with open(base / "2026" / "lineup.csv", newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["artist_canonical"] == "JANNABI"
+
+
+def test_load_artist_mapping_missing_is_empty(tmp_path):
+    assert crawl.load_artist_mapping(tmp_path) == {}
+
+
+def test_save_and_load_artist_mapping_roundtrip(tmp_path):
+    crawl.save_artist_mapping(tmp_path, {"십센치": "10CM"})
+    assert crawl.load_artist_mapping(tmp_path) == {"십센치": "10CM"}
+
+
+def test_load_artist_mapping_corrupt_aborts(tmp_path):
+    """조용히 빈 매핑으로 넘어가면 정규화 결과가 통째로 사라진다 — 반드시 중단해야 한다."""
+    (tmp_path / "artist_mapping.json").write_text("{깨진 JSON", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        crawl.load_artist_mapping(tmp_path)
+
+
+def test_load_artist_mapping_non_object_aborts(tmp_path):
+    (tmp_path / "artist_mapping.json").write_text('["배열은 안 됨"]', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        crawl.load_artist_mapping(tmp_path)
+
+
+def test_load_artist_mapping_non_string_value_aborts(tmp_path):
+    """손으로 고치는 파일이라 오타가 난다 — 문자열이 아니면 그대로 CSV에 실린다."""
+    (tmp_path / "artist_mapping.json").write_text(
+        '{"십센치": ["10CM"], "잔나비": 123}', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        crawl.load_artist_mapping(tmp_path)
+
+
+def test_run_aborts_on_old_flat_output(tmp_path, monkeypatch):
+    """연도 폴더 없는 예전 레이아웃 — 그냥 두면 29곳을 조용히 다시 수집한다."""
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    base = tmp_path / "output"
+    (base / "raw").mkdir(parents=True)
+    (base / "festivals.csv").write_text("예전 레이아웃", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as e:
+        crawl.run(2026, base)
+    assert "artist_mapping.json" in str(e.value)   # 마이그레이션 절차가 담겨 있다
+    assert not (base / "2026").exists()            # 빈 연도 폴더를 만들지 않는다
+
+
+def test_run_guard_ignores_fresh_clone_and_year_layout(tmp_path, monkeypatch):
+    """가드는 옛 평면 레이아웃에만 걸린다 — output/이 없어도, 이미 옮겼어도 그냥 돈다."""
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    base = tmp_path / "output"
+
+    crawl.run(2026, base)      # output/ 자체가 없는 새 클론
+    crawl.run(2026, base)      # 이제 output/2026/festivals.csv 가 있다
+
+    assert (base / "2026" / "festivals.csv").exists()

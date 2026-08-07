@@ -152,20 +152,25 @@ def build_festival_row(record: dict) -> dict:
     }
 
 
-def build_lineup_rows(record: dict) -> list[dict]:
+def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
+    """라인업 행을 만든다. artist_canonical은 매핑에서 채운다 — 매핑에 없으면 원문 그대로.
+
+    매핑을 여기서 적용하기 때문에 crawl을 몇 번 다시 돌려도 정규화가 복원된다.
+    """
     ext = record["extraction"]
     if not ext:
         return []
     fid = festival_id(record["university"], record["year"])
     rows = []
     for item in ext["lineup"]:
+        raw = item["artist_raw"]
         rows.append({
             "festival_id": fid,
             "day_label": item.get("day_label") or "",
             "date": item.get("date") or "",
             "time": item.get("time") or "",
-            "artist_canonical": item["artist_raw"],   # enrich가 갱신
-            "artist_raw": item["artist_raw"],
+            "artist_canonical": mapping.get(raw, raw),
+            "artist_raw": raw,
             "is_secret": "true" if item.get("is_secret") else "false",
             "source_url": record["url"] or "",
         })
@@ -202,17 +207,98 @@ def write_csv(path: Path, fieldnames: list[str], rows: list[dict]) -> None:
         raise
 
 
-def run(input_csv: Path, out_dir: Path, limit: int | None = None) -> None:
-    rows = load_universities(input_csv)
+ARTIST_MAPPING_NAME = "artist_mapping.json"
+
+
+def load_artist_mapping(base_dir: Path) -> dict[str, str]:
+    """표기 → 정식 표기 매핑. 연도 공통이므로 연도 폴더가 아니라 그 상위에 둔다.
+
+    파일이 없으면 빈 매핑 — 첫 실행의 정상 상태다. 파일이 깨졌으면 중단한다.
+    빈 매핑으로 진행하면 lineup.csv의 정규화가 전부 원문으로 되돌아간다.
+    """
+    path = base_dir / ARTIST_MAPPING_NAME
+    if not path.exists():
+        return {}
+    try:
+        mapping = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(
+            f"{path} 를 읽을 수 없습니다: {e}\n"
+            "빈 매핑으로 진행하면 정규화 결과가 사라집니다. 파일을 고치거나 지우세요."
+        )
+    if not isinstance(mapping, dict):
+        raise SystemExit(f"{path} 는 객체여야 합니다")
+    if not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+        raise SystemExit(f"{path} 의 키와 값은 모두 문자열이어야 합니다")
+    return mapping
+
+
+def save_artist_mapping(base_dir: Path, mapping: dict[str, str]) -> None:
+    """write_csv와 같은 이유로 원자적으로 쓴다 — 읽는 쪽이 반쪽 파일을 보면 안 된다."""
+    base_dir.mkdir(parents=True, exist_ok=True)
+    path = base_dir / ARTIST_MAPPING_NAME
+    temp_path = path.parent / f"{path.name}.tmp"
+    try:
+        temp_path.write_text(
+            json.dumps(mapping, ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        os.replace(temp_path, path)
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+
+
+OUTPUT_BASE = Path("output")
+
+
+def seed_path(year: int) -> Path:
+    """그 해의 시드 파일. 지난 시즌 시드는 동결되므로 연도마다 파일이 하나씩 늘어난다."""
+    return Path(f"universities-{year}.csv")
+
+
+def run(year: int, base_dir: Path = OUTPUT_BASE, limit: int | None = None) -> None:
+    seed = seed_path(year)
+    if not seed.exists():
+        available = sorted(p.name for p in Path(".").glob("universities-*.csv"))
+        raise SystemExit(
+            f"{seed} 가 없습니다. 있는 시드: {', '.join(available) or '없음'}"
+        )
+    rows = load_universities(seed)
+    wrong = sorted({r.year for r in rows if r.year != year})
+    if wrong:
+        raise SystemExit(
+            f"{seed} 의 year 컬럼에 {wrong} 가 있습니다 — --year {year} 와 다릅니다"
+        )
     if limit:
         rows = rows[:limit]
+
+    # 연도 폴더가 도입되기 전 레이아웃. 그냥 두면 캐시를 하나도 못 찾아 29곳을 조용히
+    # 다시 수집한다 (30~50분 + 세션 한도). 옮기면 LLM 재실행 없이 그대로 이어진다.
+    if (base_dir / "festivals.csv").exists():
+        raise SystemExit(
+            f"{base_dir}/festivals.csv 가 있습니다 — 연도 폴더가 없는 예전 레이아웃입니다.\n"
+            f"이대로 실행하면 {base_dir}/{year}/ 가 비어 있어 전체를 다시 수집합니다.\n"
+            "아래대로 옮긴 뒤 다시 실행하세요:\n"
+            f"  1. mkdir {base_dir}/{year}\n"
+            f"     mv {base_dir}/{{festivals.csv,lineup.csv,raw,discovered}} {base_dir}/{year}/\n"
+            f"  2. {base_dir}/{year}/lineup.csv 에서 artist_mapping.json 생성\n"
+            f"     (artist_raw → artist_canonical 대응을 {base_dir}/artist_mapping.json 에 저장)\n"
+            f"  3. {base_dir}/artists.csv 는 {base_dir}/ 에 그대로 둔다"
+        )
+
+    out_dir = base_dir / str(year)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    mapping = load_artist_mapping(base_dir)
+
     festival_rows, lineup_rows = [], []
     for i, row in enumerate(rows, 1):
         print(f"[{i}/{len(rows)}] {row.university} ...", flush=True)
         record = process_row(row, out_dir)
         print(f"  -> {record['flag']}", flush=True)
         festival_rows.append(build_festival_row(record))
-        lineup_rows.extend(build_lineup_rows(record))
+        lineup_rows.extend(build_lineup_rows(record, mapping))
     write_csv(out_dir / "festivals.csv", FESTIVAL_FIELDS, festival_rows)
     write_csv(out_dir / "lineup.csv", LINEUP_FIELDS, lineup_rows)
     print(f"완료: festivals {len(festival_rows)}행, lineup {len(lineup_rows)}행")
@@ -220,8 +306,8 @@ def run(input_csv: Path, out_dir: Path, limit: int | None = None) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FESTA 크롤러 v1")
-    parser.add_argument("--input", type=Path, default=Path("universities.csv"))
-    parser.add_argument("--output-dir", type=Path, default=Path("output"))
+    parser.add_argument("--year", type=int, required=True,
+                        help="대상 연도. universities-<연도>.csv 를 읽어 output/<연도>/ 에 쓴다")
     parser.add_argument("--limit", type=int, default=None, help="앞에서 N행만 처리 (스모크용)")
     args = parser.parse_args()
-    run(args.input, args.output_dir, args.limit)
+    run(args.year, limit=args.limit)
