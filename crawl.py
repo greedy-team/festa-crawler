@@ -228,6 +228,8 @@ def load_artist_mapping(base_dir: Path) -> dict[str, str]:
         )
     if not isinstance(mapping, dict):
         raise SystemExit(f"{path} 는 객체여야 합니다")
+    if not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+        raise SystemExit(f"{path} 의 키와 값은 모두 문자열이어야 합니다")
     return mapping
 
 
@@ -271,6 +273,20 @@ def run(year: int, base_dir: Path = OUTPUT_BASE, limit: int | None = None) -> No
         )
     if limit:
         rows = rows[:limit]
+
+    # 연도 폴더가 도입되기 전 레이아웃. 그냥 두면 캐시를 하나도 못 찾아 29곳을 조용히
+    # 다시 수집한다 (30~50분 + 세션 한도). 옮기면 LLM 재실행 없이 그대로 이어진다.
+    if (base_dir / "festivals.csv").exists():
+        raise SystemExit(
+            f"{base_dir}/festivals.csv 가 있습니다 — 연도 폴더가 없는 예전 레이아웃입니다.\n"
+            f"이대로 실행하면 {base_dir}/{year}/ 가 비어 있어 전체를 다시 수집합니다.\n"
+            "아래대로 옮긴 뒤 다시 실행하세요:\n"
+            f"  1. mkdir {base_dir}/{year}\n"
+            f"     mv {base_dir}/{{festivals.csv,lineup.csv,raw,discovered}} {base_dir}/{year}/\n"
+            f"  2. {base_dir}/{year}/lineup.csv 에서 artist_mapping.json 생성\n"
+            f"     (artist_raw → artist_canonical 대응을 {base_dir}/artist_mapping.json 에 저장)\n"
+            f"  3. {base_dir}/artists.csv 는 {base_dir}/ 에 그대로 둔다"
+        )
 
     out_dir = base_dir / str(year)
     out_dir.mkdir(parents=True, exist_ok=True)

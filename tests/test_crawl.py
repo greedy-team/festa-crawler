@@ -553,3 +553,39 @@ def test_load_artist_mapping_non_object_aborts(tmp_path):
     (tmp_path / "artist_mapping.json").write_text('["배열은 안 됨"]', encoding="utf-8")
     with pytest.raises(SystemExit):
         crawl.load_artist_mapping(tmp_path)
+
+
+def test_load_artist_mapping_non_string_value_aborts(tmp_path):
+    """손으로 고치는 파일이라 오타가 난다 — 문자열이 아니면 그대로 CSV에 실린다."""
+    (tmp_path / "artist_mapping.json").write_text(
+        '{"십센치": ["10CM"], "잔나비": 123}', encoding="utf-8")
+    with pytest.raises(SystemExit):
+        crawl.load_artist_mapping(tmp_path)
+
+
+def test_run_aborts_on_old_flat_output(tmp_path, monkeypatch):
+    """연도 폴더 없는 예전 레이아웃 — 그냥 두면 29곳을 조용히 다시 수집한다."""
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    base = tmp_path / "output"
+    (base / "raw").mkdir(parents=True)
+    (base / "festivals.csv").write_text("예전 레이아웃", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as e:
+        crawl.run(2026, base)
+    assert "artist_mapping.json" in str(e.value)   # 마이그레이션 절차가 담겨 있다
+    assert not (base / "2026").exists()            # 빈 연도 폴더를 만들지 않는다
+
+
+def test_run_guard_ignores_fresh_clone_and_year_layout(tmp_path, monkeypatch):
+    """가드는 옛 평면 레이아웃에만 걸린다 — output/이 없어도, 이미 옮겼어도 그냥 돈다."""
+    monkeypatch.chdir(tmp_path)
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    base = tmp_path / "output"
+
+    crawl.run(2026, base)      # output/ 자체가 없는 새 클론
+    crawl.run(2026, base)      # 이제 output/2026/festivals.csv 가 있다
+
+    assert (base / "2026" / "festivals.csv").exists()
