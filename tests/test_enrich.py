@@ -8,6 +8,7 @@ import crawl
 import enrich
 from crawl import LINEUP_FIELDS, write_csv
 from schema import EnrichResult
+from test_crawl import _seed_row, _write_seed
 
 ENRICH_JSON = """{
   "mapping": {"십센치": "10CM", "잔나비": "잔나비"},
@@ -208,3 +209,50 @@ def test_enrich_refreshes_lineup_even_when_no_new_names(tmp_path, monkeypatch):
     with open(tmp_path / "2026" / "lineup.csv", newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["artist_canonical"] == "10CM"   # 매핑 값으로 갱신됨 (LLM 없이도)
+
+
+def test_enrich_ignores_mapping_keys_not_sent(tmp_path, monkeypatch):
+    """LLM이 안 물어본 이름까지 매핑에 넣어도 확정된 표기를 덮으면 안 된다.
+
+    프롬프트가 기존 정식 표기 목록을 보여주므로 모델이 그 키를 되돌려줄 수 있다.
+    한 번 덮이면 그 이름은 다시 LLM에 가지 않으니 잘못된 표기가 영구히 굳는다.
+    """
+    _seed_year(tmp_path, 2026, ["십센치", "잔나비"])
+    crawl.save_artist_mapping(tmp_path, {"십센치": "10CM"})
+    # 새 이름은 "잔나비" 하나뿐인데 응답이 기존 키("십센치")까지 다시 매핑한다
+    rogue = json.dumps({
+        "mapping": {"잔나비": "JANNABI", "십센치": "십센치"},
+        "artists": [{"name_canonical": "JANNABI", "name_en": "JANNABI",
+                     "real_name": None, "category": "밴드", "aliases": [],
+                     "needs_review": False}],
+    }, ensure_ascii=False)
+    monkeypatch.setattr(enrich, "call_claude", lambda prompt, timeout=120: rogue)
+    enrich.enrich(tmp_path)
+
+    assert crawl.load_artist_mapping(tmp_path)["십센치"] == "10CM"   # 확정 표기 유지
+    with open(tmp_path / "2026" / "lineup.csv", newline="", encoding="utf-8-sig") as f:
+        canonical = {r["artist_raw"]: r["artist_canonical"] for r in csv.DictReader(f)}
+    assert canonical["십센치"] == "10CM"
+    assert canonical["잔나비"] == "JANNABI"     # 물어본 이름은 정상 반영
+
+
+def test_enrich_then_crawl_keeps_normalized_names(tmp_path, monkeypatch):
+    """이슈 #14의 실제 순서 — enrich가 정한 표기가 crawl 재실행 뒤에도 lineup.csv에 남는다."""
+    monkeypatch.chdir(tmp_path)
+    base = tmp_path / "output"
+    _seed_year(base, 2026, ["십센치"])
+    _write_seed(tmp_path, 2026, [_seed_row()])
+    monkeypatch.setattr(enrich, "call_claude", lambda prompt, timeout=120: ENRICH_JSON)
+
+    def boom(url):
+        raise AssertionError("raw 캐시가 있으므로 fetch하면 안 됨")
+
+    monkeypatch.setattr(crawl, "fetch_body", boom)
+
+    enrich.enrich(base)
+    crawl.run(2026, base)
+
+    with open(base / "2026" / "lineup.csv", newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["artist_raw"] == "십센치"
+    assert rows[0]["artist_canonical"] == "10CM"

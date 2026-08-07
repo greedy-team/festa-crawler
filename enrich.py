@@ -145,7 +145,10 @@ def enrich(base_dir: Path) -> None:
     result = None
     if new_names:
         result = normalize(new_names, sorted(set(mapping.values())))
-        mapping.update(result.mapping)
+        # 이번에 물어본 이름만 받는다. 프롬프트가 기존 정식 표기를 보여주므로 모델이
+        # 그 키를 되돌려줄 수 있는데, 한 번 덮이면 다시 LLM에 가지 않아 영구히 굳는다.
+        asked = set(new_names)
+        mapping.update({k: v for k, v in result.mapping.items() if k in asked})
         save_artist_mapping(base_dir, mapping)
 
     # 매핑 값이 손으로 바뀌었을 수도 있으니 새 이름이 없어도 항상 반영한다.
