@@ -70,38 +70,43 @@ flowchart LR
 
 ```mermaid
 erDiagram
-    festivals ||--o{ lineup : "festival_id"
+    festivals ||--o{ lineup : "import_key"
     lineup }o--|| artists : "artist_canonical"
 
     festivals {
-        string festival_id "축제 식별자 (대학명-연도)"
-        string university "대학명 · 캠퍼스 · 지역"
-        int year
-        string festival_name "축제명"
-        date start_date "시작일 · 종료일"
+        string import_key "축제 식별자 (주최명-연도)"
+        string host_name "주최명 (대학명)"
+        string name "축제명"
+        date start_date "시작일"
+        date end_date "종료일"
         string venue_name "장소"
-        string outsider_admission "외부인 입장"
-        string ticket_info "유료/예매"
-        string instagram_handle "총학 계정"
+        string poster_url "포스터 이미지 URL"
+        string image_urls "이미지 URL (|로 연결)"
+        string description "축제 설명"
+        string hashtags "해시태그 (|로 연결)"
+        string external_visitor_policy "외부인 입장 (ALLOWED/CONDITIONAL/DENIED)"
+        string verification_method "본인 확인 방법"
+        string ticket_type "FREE / PAID"
+        string ticket_open_at "예매 오픈 시각"
+        string admission_raw "입장 조건 원문"
         string source_url "출처 URL"
-        string discovery "manual | sitemap | search"
+        string discovery "MANUAL | SITEMAP | SEARCH"
         string flag "처리 결과"
+        string instagram_url "인스타그램 URL"
     }
     lineup {
-        string festival_id "축제 식별자"
-        string day_label "1일차 / DAY1 (원문 표기)"
-        date date "정규화된 날짜"
-        string time "공연 시각"
-        string artist_canonical "정식 표기"
-        string artist_raw "원문 표기 (보존)"
-        bool is_secret "시크릿 게스트"
+        string import_key "축제 식별자"
+        int day "n일차 (원문 없으면 빈 값)"
+        int order "그 날 안에서의 공연 순서"
+        string artist_raw "원문 표기 (시크릿 게스트는 빈 값)"
+        string artist_canonical "정식 표기 (시크릿 게스트는 빈 값)"
+        bool revealed "공개 여부 (시크릿 게스트는 false)"
     }
     artists {
-        string name_canonical "정식 활동명"
-        string name_en "영문명"
-        string real_name "본명"
-        string category "가수 / 밴드 등"
-        string aliases "다른 표기 (;로 연결)"
+        string name "정식 활동명"
+        string other_names "다른 표기 (|로 연결)"
+        string genre "HIPHOP / BALLAD_RNB / DANCE / BAND"
+        string image_url "이미지 URL"
         bool needs_review "확신 낮음"
     }
 ```
@@ -181,9 +186,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 `lineup.csv`가 그 값으로 갱신된다 (LLM 호출 없음). `output/artists.csv`의
 `needs_review` 컬럼이 손볼 대상 목록이다.
 
-**스키마 변경 시 재생성.** `festival_id` 컬럼 도입(#9) 이전에 만든 `output/`가 남아 있다면
-새 스키마와 맞지 않는다 — `crawl.py`를 한 번 다시 실행해 재생성한다. `output/<연도>/raw/*.json`
-캐시가 남아 있으면 캐시 히트만 일어나 LLM 호출 없이 빠르게 끝난다.
+**스키마 변경 시 재생성.** 캐시 레코드는 `schema_version`을 담고 있다. 버전이 다른
+`output/<연도>/raw/*.json` 캐시는 `crawl.py` 실행 시 자동으로 재수집된다. 재수집이
+실패하면 이전 성공 결과가 그대로 유지된다 — 캐시 파일은 지우지 않아도 되고, 다음 실행에서
+다시 재시도한다.
 
 **소요 시간.** 캐시가 빈 상태에서 29곳 전체를 돌면 30~50분 걸린다. 대부분이 LLM 호출 대기
 시간이고, 특히 검색 탐색은 1건에 60초 이상이다. 중간에 끊겨도 캐시가 남으니 같은 명령으로
@@ -204,10 +210,10 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 │ [문제만] [검색출처]   │ 건국대학교-2026                  │
 │ [전체]  [아티스트]    │  [다시 돌리기] [탐색부터]        │
 │                      │  축제명 / 기간 / 장소 / 외부인   │
-│ ● no_candidate 숙명   │  티켓 / 인스타 / 포스터 / 출처   │
-│ ● no_candidate 동덕   ├─────────────────────────────────┤
-│ ○ ok      건국       │ 라인업 8건                       │
-│ ○ ok      고려       │  10CM ← 십센치   1일차 19:00    │
+│ ● NO_CANDIDATE 숙명   │  티켓 / 인스타 / 포스터 / 출처   │
+│ ● NO_CANDIDATE 동덕   ├─────────────────────────────────┤
+│ ○ OK      건국       │ 라인업 8건                       │
+│ ○ OK      고려       │  10CM ← 십센치   1일차 19:00    │
 │ ...                  ├─────────────────────────────────┤
 │                      │ 원본 (iframe)   [새 탭 ↗]        │
 └──────────────────────┴─────────────────────────────────┘
@@ -217,16 +223,16 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 | | |
 | --- | --- |
-| 필터 `문제만` | `flag != ok` 행만. 진입 시 기본값 — 사람이 볼 것부터 보여준다 |
-| 필터 `검색출처` | `discovery`가 `sitemap` 또는 `search`인 행. 손으로 고른 출처가 아니라 우선 확인 대상이다 |
+| 필터 `문제만` | `flag != OK` 행만. 진입 시 기본값 — 사람이 볼 것부터 보여준다 |
+| 필터 `검색출처` | `discovery`가 `SITEMAP` 또는 `SEARCH`인 행. 손으로 고른 출처가 아니라 우선 확인 대상이다 |
 | 필터 `전체` | 축제 29곳 전부 |
 | 탭 `아티스트` | `artists.csv`를 `needs_review` 우선으로 정렬해 표시 (정렬만, 필터 아님) |
 | 상세 보기 | 축제 필드 전체 + 그 축제의 라인업. `artist_canonical ← artist_raw`로 정규화 전후를 나란히 |
 | 원본 대조 | `source_url`을 iframe으로 임베드. 막는 사이트가 많아 `새 탭 ↗`이 실질적 주경로다 |
 | 버튼 `전체 크롤` | `crawl.py` 전체 실행 (캐시 비면 30~50분) |
 | 버튼 `enrich` | `enrich.py` 실행 |
-| 버튼 `다시 돌리기` | 그 대학의 `raw/` 캐시만 지우고 재실행. `mismatch`·`empty_body`처럼 출처는 맞고 추출이 틀린 행에 |
-| 버튼 `탐색부터` | `raw/`+`discovered/`를 지우고 재실행. `no_candidate`처럼 후보 목록 자체가 쓸모없던 행에 |
+| 버튼 `다시 돌리기` | 그 대학의 `raw/` 캐시만 지우고 재실행. `MISMATCH`·`EMPTY_BODY`처럼 출처는 맞고 추출이 틀린 행에 |
+| 버튼 `탐색부터` | `raw/`+`discovered/`를 지우고 재실행. `NO_CANDIDATE`처럼 후보 목록 자체가 쓸모없던 행에 |
 | 로그 | 실행 중인 잡의 stdout을 1초 간격으로 흘려보낸다. 끝나면 상태가 바뀌고 목록이 자동 갱신된다 |
 | 키보드 | `j`/`k`로 목록 이동 |
 
@@ -259,18 +265,18 @@ CSV 재생성까지 따라온다.
 
 | flag | 의미 |
 |---|---|
-| `ok` | 수집·추출·검증 모두 성공 |
-| `fetch_failed` | 본문 수집 실패 (네트워크 오류, robots.txt 차단 등) |
-| `empty_body` | 본문이 100자 미만 (포스터 이미지만 있는 글 등) |
-| `extract_failed` | LLM 추출이 2회 시도 후에도 유효한 JSON을 내지 못함 |
-| `mismatch` | 추출은 됐지만 결과가 요청한 대학·연도 글이 아닌 것으로 판정 |
-| `no_candidate` | 검색까지 했으나 쓸 만한 후보를 찾지 못함 |
-| `no_source` | 출처를 확보하지 못한 그 밖의 경우 |
+| `OK` | 수집·추출·검증 모두 성공 |
+| `FETCH_FAILED` | 본문 수집 실패 (네트워크 오류, robots.txt 차단 등) |
+| `EMPTY_BODY` | 본문이 100자 미만 (포스터 이미지만 있는 글 등) |
+| `EXTRACT_FAILED` | LLM 추출이 2회 시도 후에도 유효한 JSON을 내지 못함 |
+| `MISMATCH` | 추출은 됐지만 결과가 요청한 대학·연도 글이 아닌 것으로 판정 |
+| `NO_CANDIDATE` | 검색까지 했으나 쓸 만한 후보를 찾지 못함 |
+| `NO_SOURCE` | 출처를 확보하지 못한 그 밖의 경우 |
 
-손으로 넣은 URL이 실패하고 검색도 실패하면 **`no_candidate`가 아니라 그 URL의 실패 사유가
-남는다** (`fetch_failed` 등). URL이 깨졌다는 정보가 더 쓸모 있기 때문이다.
+손으로 넣은 URL이 실패하고 검색도 실패하면 **`NO_CANDIDATE`가 아니라 그 URL의 실패 사유가
+남는다** (`FETCH_FAILED` 등). URL이 깨졌다는 정보가 더 쓸모 있기 때문이다.
 
-`flag != ok` 행은 운영자가 `source_url`을 직접 열어 확인한다.
+`flag != OK` 행은 운영자가 `source_url`을 직접 열어 확인한다.
 
 ## 캐시 동작
 
@@ -300,10 +306,10 @@ CSV 재생성까지 따라온다.
   이미 처리된 대학은 캐시로 건너뛰고 나머지만 이어서 처리한다.
 - `enrich.py`는 매핑에 없는 아티스트를 한 번에 정규화하는 LLM 호출 1건이라 수 분(최대
   15분 타임아웃) 걸릴 수 있다. 첫 실행이 가장 오래 걸리고, 그 뒤로는 새 이름 수만큼만 든다.
-- 자동으로 채워진 행(`discovery=sitemap` 또는 `search`)은 손으로 고른 출처가 아니므로
+- 자동으로 채워진 행(`discovery=SITEMAP` 또는 `SEARCH`)은 손으로 고른 출처가 아니므로
   **검수 때 우선 확인한다.** 대학 공식 홈페이지나 학보사가 잡히면 신뢰도가 높고,
   커뮤니티·티켓 플랫폼이면 한 번 더 본다.
-- `discovery=sitemap`은 특정 블로그 몇 곳에서만 나온다. 시즌 종료 후 `discovery` 분포를 세어
+- `discovery=SITEMAP`은 특정 블로그 몇 곳에서만 나온다. 시즌 종료 후 `discovery` 분포를 세어
   단일 출처 편중이 심해지지 않았는지 확인하고, 심해졌으면 탐색 순서를 재검토한다.
 - 크롤러 산출물은 초안이다. **`./admin.sh`로 검토한 뒤 백엔드 어드민에 CSV를 첨부한다** —
   최종 신뢰는 검수 단계가 담보한다.
