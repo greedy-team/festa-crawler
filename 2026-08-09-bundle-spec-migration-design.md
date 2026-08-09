@@ -72,13 +72,15 @@ import_key,day,order,artist_raw,artist_canonical,revealed
 ### artists.csv
 
 ```
-name,other_names,genre,category,image_url,needs_review
+name,other_names,genre,image_url,needs_review
 ```
 
 - `name` ← 구 `name_canonical`
 - `other_names` ← 구 `aliases` ∪ `name_en` ∪ `real_name` 병합, `name` 중복 제거,
   구분자 `;` → `\|`
 - `genre`: 신규 — `HIPHOP` · `BALLAD_RNB` · `DANCE` · `BAND`, 확실치 않으면 빈 값
+- `category`는 두지 않는다 — 장르로 일원화 (2026-08-09 사용자 결정). 명세에서
+  제거를 제안한다(확인 항목 7)
 - `image_url`: 항상 빈 값 (크롤러는 아티스트 이미지를 수집하지 않는다, 선택 필드)
 - `needs_review`: 명세에 없지만 유지 — 백엔드에 스펙 추가를 제안하고(확인 항목 3),
   거부되면 컬럼을 제거한다
@@ -99,9 +101,8 @@ name,other_names,genre,category,image_url,needs_review
   `Literal[...] | None`(pydantic이 enum 검증 — 벗어나면 기존 재시도 경로),
   `ticket_open_at: str | None`, `admission_raw: str | None`
 - `LineupItem`: `day_label` `date` `time` 제거, `day: int | None` 추가
-- `ArtistMaster`: `name` `other_names: list[str]` `genre` `category`
-  `needs_review`로 재편 — LLM이 별칭·영문표기·본명을 처음부터 `other_names`
-  하나로 합쳐 내놓는다
+- `ArtistMaster`: `name` `other_names: list[str]` `genre` `needs_review`로
+  재편 — LLM이 별칭·영문표기·본명을 처음부터 `other_names` 하나로 합쳐 내놓는다
 
 ### extract.py
 
@@ -165,6 +166,7 @@ python enrich.py              # artists.csv 마이그레이션 + genre 분류
 | 4 | 명세 오탈자: festivals 헤더 코드블록 `instagram_url` 누락, artists 헤더 끝 `, `, `\|` 구분자가 표 마크다운을 깨뜨림 | 전달 |
 | 5 | 실패 행(`flag != OK`)의 `discovery` 빈 값 허용 확인 (명세상 필수지만 어차피 SKIP) | 확인 |
 | 6 | `instagram_url` 컬럼 위치(맨 끝) 확정 | 확인 |
+| 7 | `artists.csv`에서 `category` 컬럼 제거 제안 — 장르(genre)로 일원화, 크롤러는 category를 채우지 않는다 | 제안 |
 
 ## 테스트·검증
 
@@ -189,5 +191,6 @@ python enrich.py              # artists.csv 마이그레이션 + genre 분류
 | `flag != OK` lineup 미출력 | 백엔드에서 고아 INVALID 행만 만든다 |
 | `real_name` → `other_names` 병합 | 컬럼이 사라지므로, 본명도 검색 매칭에 유용해 별칭으로 보존 |
 | `needs_review` 유지 + 스펙 제안 | 크롤러가 이미 만드는 신호. 백엔드 프리뷰에 같은 개념 존재 |
+| `category` 제거, `genre`로 일원화 | 개발 단계 사용자 결정 — 자유텍스트 분류와 enum 장르 이중화 불필요 |
 | 캐시 버전 불일치는 자동 재수집 | 의도된 동작이고 진행 로그가 보인다. 탐색 캐시는 유지 |
 | 재수집 실패 시 구 캐시 폴백 | 재실행이 데이터를 파괴하면 안 된다 (DEC-0028 원칙) |

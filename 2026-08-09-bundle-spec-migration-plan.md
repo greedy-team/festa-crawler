@@ -19,7 +19,7 @@
 - CSV는 `utf-8-sig`(BOM) + `write_csv()`(원자적 쓰기 + 수식 새니타이즈) 유지
 - festivals 헤더(19열, 명세 순서): `import_key,host_name,name,start_date,end_date,venue_name,poster_url,image_urls,description,hashtags,external_visitor_policy,verification_method,ticket_type,ticket_open_at,admission_raw,source_url,discovery,flag,instagram_url`
 - lineup 헤더(6열): `import_key,day,order,artist_raw,artist_canonical,revealed`
-- artists 헤더(6열): `name,other_names,genre,category,image_url,needs_review`
+- artists 헤더(5열): `name,other_names,genre,image_url,needs_review` — `category`는 두지 않는다 (장르로 일원화, 2026-08-09 결정)
 - enum 값: flag `OK FETCH_FAILED EMPTY_BODY EXTRACT_FAILED MISMATCH NO_CANDIDATE NO_SOURCE` / discovery `MANUAL SITEMAP SEARCH` / policy `ALLOWED CONDITIONAL DENIED` / method `NONE STUDENT_ID PRE_BOOKING INVITATION OTHER` / ticket `FREE PAID` / genre `HIPHOP BALLAD_RNB DANCE BAND`
 - 다중값 구분자는 `|`. 내부 record·캐시의 flag/discovery는 소문자 유지 — 대문자 변환은 CSV 경계(build 함수)에서만
 - 주석·문서는 기존처럼 한국어. 요청받지 않은 리팩터링 금지
@@ -29,11 +29,16 @@
 ### Task 1: schema.py 재편
 
 **Files:**
-- Modify: `schema.py`
-- Test: `tests/test_schema.py`
+- Modify: `schema.py`, `enrich.py` (`ARTIST_FIELDS`·`_merge_artists`만 — ArtistMaster 개명이 즉시 깨뜨리는 부분의 전방 전환. 하위호환 심 금지)
+- Test: `tests/test_schema.py`, `tests/test_enrich.py` (픽스처를 새 필드명으로)
+
+> 2026-08-09 수정: 스키마 개명이 enrich.py를 즉시 깨뜨리는 결합이 확인돼,
+> `ARTIST_FIELDS`(새 5열)와 `_merge_artists`의 전환을 이 태스크로 앞당긴다
+> (개발 단계 — 구 CSV 호환 유지하지 않음, 사용자 결정). Task 6에는 프롬프트·
+> genre 분류·마이그레이션·가드 메시지가 남는다.
 
 **Interfaces:**
-- Produces: `ExtractionResult`(신규 필드: `description: str|None`, `hashtags: list[str]`, `external_visitor_policy/verification_method/ticket_type: Literal|None`, `ticket_open_at: str|None`, `admission_raw: str|None`; 제거: `outsider_admission`, `ticket_info`), `LineupItem`(`artist_raw: str`, `day: int|None`, `is_secret: bool`; 제거: `day_label`, `date`, `time`), `ArtistMaster`(`name: str`, `other_names: list[str]`, `genre: Genre|None`, `category: str|None`, `needs_review: bool`), 타입 별칭 `Genre`
+- Produces: `ExtractionResult`(신규 필드: `description: str|None`, `hashtags: list[str]`, `external_visitor_policy/verification_method/ticket_type: Literal|None`, `ticket_open_at: str|None`, `admission_raw: str|None`; 제거: `outsider_admission`, `ticket_info`), `LineupItem`(`artist_raw: str`, `day: int|None`, `is_secret: bool`; 제거: `day_label`, `date`, `time`), `ArtistMaster`(`name: str`, `other_names: list[str]`, `genre: Genre|None`, `needs_review: bool`), 타입 별칭 `Genre`
 - Consumes: 없음 (기반 태스크)
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_schema.py`에서 아래 3개 테스트를 교체·추가. `test_extraction_result_full_parse`와 `test_enrich_result_parse`, `test_artist_master_defaults`를 새 스키마 기준으로 다시 쓰고, enum 거부 테스트를 추가한다:
@@ -80,7 +85,7 @@ def test_enrich_result_parse():
         "mapping": {"십센치": "10CM", "10cm": "10CM"},
         "artists": [
             {"name": "10CM", "other_names": ["십센치", "권정열"],
-             "genre": "BAND", "category": "가수", "needs_review": False}
+             "genre": "BAND", "needs_review": False}
         ],
     }
     result = EnrichResult.model_validate(data)
@@ -140,7 +145,6 @@ class ArtistMaster(BaseModel):
     name: str
     other_names: list[str] = Field(default_factory=list)
     genre: Genre | None = None
-    category: str | None = None
     needs_review: bool = False
 ```
 
@@ -710,9 +714,14 @@ def _keep_stale_on_failure(record: dict, stale_ok: dict | None, row: UniversityR
 - Modify: `enrich.py`, `schema.py` (`GenreResult` 추가)
 - Test: `tests/test_enrich.py`
 
+> 참고: `ARTIST_FIELDS`(새 5열)와 `_merge_artists` 전환은 Task 1에서 이미 반영됨.
+> 이 태스크의 몫은 프롬프트(genre·other_names 규칙), `classify_genres`,
+> `_migrate_artists_csv`, lineup 가드 메시지, `GenreResult`다. Step 3~4의 코드 중
+> 이미 반영된 부분은 검증만 하고 넘어간다.
+
 **Interfaces:**
 - Consumes: Task 1의 `ArtistMaster`(`name`/`other_names`/`genre`), `Genre`; Task 4의 `LINEUP_FIELDS`
-- Produces: `ARTIST_FIELDS = ["name", "other_names", "genre", "category", "image_url", "needs_review"]`, `classify_genres(names: list[str]) -> dict[str, str | None]`, `_migrate_artists_csv(base_dir: Path) -> None`, `schema.GenreResult`
+- Produces: `ARTIST_FIELDS = ["name", "other_names", "genre", "image_url", "needs_review"]`, `classify_genres(names: list[str]) -> dict[str, str | None]`, `_migrate_artists_csv(base_dir: Path) -> None`, `schema.GenreResult`
 
 - [ ] **Step 1: 실패하는 테스트 작성** — `tests/test_enrich.py`에서 LLM 응답 픽스처의 artists를 새 형태(`{"name": ..., "other_names": [...], "genre": ...}`)로 갱신하고, `test_enrich_accumulates_artists_csv`를 새 컬럼 기준으로 수정하고, 아래를 추가한다:
 
@@ -732,11 +741,12 @@ def test_migrate_artists_csv_converts_old_schema(tmp_path, monkeypatch):
     assert rows[0]["genre"] == "BAND"
     assert rows[0]["image_url"] == ""
     assert rows[0]["needs_review"] == "false"
+    assert "category" not in rows[0]          # 장르로 일원화 — category는 버린다
 
 
 def test_migrate_artists_csv_noop_on_new_schema(tmp_path, monkeypatch):
     new_header = ",".join(enrich.ARTIST_FIELDS) + "\n"
-    content = new_header + "10CM,십센치,BAND,가수,,false\n"
+    content = new_header + "10CM,십센치,BAND,,false\n"
     (tmp_path / "artists.csv").write_text(content, encoding="utf-8-sig")
 
     def boom(names):
@@ -755,7 +765,7 @@ def test_classify_genres_parses_llm_response(monkeypatch):
 
 def test_merge_artists_writes_new_columns(tmp_path):
     enrich._merge_artists(tmp_path, [ArtistMaster(
-        name="10CM", other_names=["십센치"], genre="BAND", category="가수")])
+        name="10CM", other_names=["십센치"], genre="BAND")])
     with open(tmp_path / "artists.csv", newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["name"] == "10CM"
@@ -779,7 +789,7 @@ class GenreResult(BaseModel):
 `ARTIST_FIELDS`·구 헤더 상수·프롬프트 교체:
 
 ```python
-ARTIST_FIELDS = ["name", "other_names", "genre", "category", "image_url", "needs_review"]
+ARTIST_FIELDS = ["name", "other_names", "genre", "image_url", "needs_review"]
 OLD_ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
                      "aliases", "needs_review"]
 ```
@@ -799,7 +809,7 @@ OLD_ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
 {{"mapping": {{"원문표기": "정식표기"}},
   "artists": [{{"name": str, "other_names": [str],
                "genre": "HIPHOP"|"BALLAD_RNB"|"DANCE"|"BAND"|null,
-               "category": str|null, "needs_review": bool}}]}}
+               "needs_review": bool}}]}}
 ```
 
 `_merge_artists`를 새 컬럼으로 교체:
@@ -820,7 +830,6 @@ def _merge_artists(base_dir: Path, artists: list[ArtistMaster]) -> None:
             "name": a.name,
             "other_names": "|".join(a.other_names),
             "genre": a.genre or "",
-            "category": a.category or "",
             "image_url": "",
             "needs_review": "true" if a.needs_review else "false",
         })
@@ -874,10 +883,9 @@ def _migrate_artists_csv(base_dir: Path) -> None:
             "name": name,
             "other_names": "|".join(dict.fromkeys(others)),   # 순서 유지 중복 제거
             "genre": genres.get(name) or "",
-            "category": r["category"],
             "image_url": "",
             "needs_review": r["needs_review"],
-        })
+        })    # 구 category는 버린다 — 장르로 일원화
     write_csv(path, ARTIST_FIELDS, rows)
     print(f"artists.csv 마이그레이션 완료: {len(rows)}명, "
           f"genre 분류 {sum(1 for r in rows if r['genre'])}건")
@@ -964,10 +972,10 @@ function renderArtists() {
   $("list").innerHTML = "";
   $("detail").innerHTML = `
     <h2>아티스트 ${rows.length}</h2>
-    <table><tr><th>대표명</th><td>장르 / 분류 / 다른 표기</td></tr>
+    <table><tr><th>대표명</th><td>장르 / 다른 표기</td></tr>
     ${rows.map((a) => `
       <tr><th>${a.needs_review === "true" ? "⚠️ " : ""}${esc(a.name)}</th>
-          <td>${esc(a.genre)} / ${esc(a.category)} / ${esc(a.other_names)}</td></tr>`).join("")}</table>`;
+          <td>${esc(a.genre)} / ${esc(a.other_names)}</td></tr>`).join("")}</table>`;
 }
 ```
 
@@ -1015,6 +1023,9 @@ function renderArtists() {
 5. flag != OK 행은 discovery가 빈 값입니다 (수집 실패라 발견 경로가 없음).
    필수 컬럼이지만 어차피 SKIP 처리되는 행이라 빈 값 허용을 확인 부탁합니다.
 6. instagram_url 컬럼 위치는 헤더 맨 끝으로 두었습니다. 다른 위치가 필요하면 알려주세요.
+7. artists.csv에서 category 컬럼 제거를 제안합니다 — 크롤러는 장르(genre)만
+   분류하고 자유텍스트 분류는 채우지 않습니다. 명세의 category 예시("가수 ·
+   싱어송라이터")가 필요하면 알려주세요.
 ```
 
 ---
