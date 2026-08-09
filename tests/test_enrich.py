@@ -40,10 +40,9 @@ def _seed_year(base_dir: Path, year: int, names: list[str]) -> None:
         },
     }, ensure_ascii=False), "utf-8")
     write_csv(ydir / "lineup.csv", LINEUP_FIELDS, [
-        {"festival_id": f"연세대학교-{year}", "day_label": "1일차",
-         "date": "", "time": "", "artist_canonical": n, "artist_raw": n,
-         "is_secret": "false", "source_url": "https://example.com/post"}
-        for n in names
+        {"import_key": f"연세대학교-{year}", "day": 1, "order": i,
+         "artist_raw": n, "artist_canonical": n, "revealed": "true"}
+        for i, n in enumerate(names, 1)
     ])
 
 

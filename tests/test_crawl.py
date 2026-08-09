@@ -24,11 +24,17 @@ def _extraction() -> ExtractionResult:
         "found": True, "university_name": "연세대학교", "year": 2026,
         "festival_name": "아카라카", "start_date": "2026-05-21",
         "end_date": "2026-05-23", "venue_name": "노천극장",
-        "outsider_admission": "사전 예매 시 가능", "ticket_info": "유료",
-        "instagram_handle": "hyu_festival",
+        "description": "연세대학교의 대표 축제.",
+        "hashtags": ["연세대축제", "아카라카"],
+        "external_visitor_policy": "CONDITIONAL",
+        "verification_method": "PRE_BOOKING",
+        "ticket_type": "PAID", "ticket_open_at": "2026-05-07T14:00:00",
+        "admission_raw": "외부인은 예매 후 입장 가능합니다.",
+        "instagram_handle": "yonsei_festival",
         "lineup": [
-            {"artist_raw": "잔나비", "day_label": "1일차", "date": "2026-05-21"},
-            {"artist_raw": "시크릿", "is_secret": True},
+            {"artist_raw": "잔나비", "day": 1},
+            {"artist_raw": "십센치", "day": 1},
+            {"artist_raw": "시크릿", "day": 2, "is_secret": True},
         ],
     })
 
@@ -111,29 +117,85 @@ def test_process_row_cache_hit_refreshes_campus_region(tmp_path, monkeypatch):
     assert record["region"] == "서울 서대문구"
 
 
+def test_csv_headers_match_backend_spec():
+    assert crawl.FESTIVAL_FIELDS == [
+        "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
+        "poster_url", "image_urls", "description", "hashtags",
+        "external_visitor_policy", "verification_method", "ticket_type",
+        "ticket_open_at", "admission_raw", "source_url", "discovery", "flag",
+        "instagram_url",
+    ]
+    assert crawl.LINEUP_FIELDS == [
+        "import_key", "day", "order", "artist_raw", "artist_canonical", "revealed",
+    ]
+
+
 def test_build_rows():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
-              "url": "https://example.com/post", "flag": "ok",
+              "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
               "poster_image_url": "https://example.com/p.jpg",
+              "image_urls": ["https://cdn.example.com/1.jpg", "https://cdn.example.com/2.jpg"],
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
-    assert frow["festival_name"] == "아카라카"
-    assert frow["flag"] == "ok"
-    lrows = build_lineup_rows(record, {})
-    assert len(lrows) == 2
-    assert lrows[0]["artist_canonical"] == "잔나비"   # 초기값 = artist_raw
-    assert lrows[1]["is_secret"] == "true"
+    assert frow["import_key"] == "연세대학교-2026"
+    assert frow["host_name"] == "연세대학교"
+    assert frow["name"] == "아카라카"
+    assert frow["flag"] == "OK"
+    assert frow["discovery"] == "MANUAL"
+    assert frow["image_urls"] == "https://cdn.example.com/1.jpg|https://cdn.example.com/2.jpg"
+    assert frow["hashtags"] == "연세대축제|아카라카"
+    assert frow["instagram_url"] == "https://www.instagram.com/yonsei_festival"
+    assert set(frow) == set(crawl.FESTIVAL_FIELDS)
+
+    lrows = build_lineup_rows(record, {"십센치": "10CM"})
+    assert [r["order"] for r in lrows] == [1, 2, 1]      # 일차별로 1부터
+    assert lrows[0]["day"] == 1 and lrows[2]["day"] == 2
+    assert lrows[1]["artist_canonical"] == "10CM"        # 매핑 적용
+    assert lrows[2]["revealed"] == "false"
+    assert lrows[2]["artist_raw"] == "" and lrows[2]["artist_canonical"] == ""
+    assert set(lrows[0]) == set(crawl.LINEUP_FIELDS)
 
 
 def test_build_rows_without_extraction():
     record = {"university": "고려대학교", "campus": "안암캠퍼스",
-              "region": "서울 성북구", "year": 2026, "url": None,
+              "region": "서울 성북구", "year": 2026, "url": None, "discovery": "",
               "flag": "no_source", "poster_image_url": None, "extraction": None}
     frow = build_festival_row(record)
-    assert frow["flag"] == "no_source"
-    assert frow["festival_name"] == ""
+    assert frow["flag"] == "NO_SOURCE"
+    assert frow["name"] == ""
     assert build_lineup_rows(record, {}) == []
+
+
+def test_build_lineup_rows_skips_non_ok_festival():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "flag": "mismatch", "discovery": "",
+              "poster_image_url": None, "extraction": _extraction().model_dump()}
+    assert build_lineup_rows(record, {}) == []
+
+
+def test_admission_raw_truncated_to_200_chars():
+    long_ext = _extraction().model_copy(update={"admission_raw": "가" * 300})
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
+              "poster_image_url": None, "extraction": long_ext.model_dump()}
+    assert len(build_festival_row(record)["admission_raw"]) == 200
+
+
+def test_build_lineup_rows_day_none_gets_own_order():
+    ext = _extraction().model_copy(update={"lineup": [
+        {"artist_raw": "잔나비", "day": None},
+        {"artist_raw": "십센치", "day": None},
+    ]})
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
+              "poster_image_url": None, "extraction": ext.model_dump()}
+    lrows = build_lineup_rows(record, {})
+    assert [r["day"] for r in lrows] == ["", ""]         # 불명은 빈 값 (백엔드에서 INVALID)
+    assert [r["order"] for r in lrows] == [1, 2]
 
 
 def test_write_csv_utf8_bom(tmp_path):
@@ -242,11 +304,11 @@ def test_process_row_passes_candidates_to_extract(tmp_path, monkeypatch):
 def test_build_festival_row_includes_instagram_handle():
     record = {"university": "한양대학교", "campus": "서울캠퍼스",
               "region": "서울 성동구", "year": 2026,
-              "url": "https://example.com/post", "flag": "ok",
+              "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
               "poster_image_url": None,
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
-    assert frow["instagram_handle"] == "hyu_festival"
+    assert frow["instagram_url"] == "https://www.instagram.com/yonsei_festival"
     assert list(frow.keys()) == crawl.FESTIVAL_FIELDS   # 컬럼 순서 일치
 
 
@@ -318,7 +380,7 @@ def test_build_festival_row_includes_discovery():
               "discovery": "search", "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
-    assert frow["discovery"] == "search"
+    assert frow["discovery"] == "SEARCH"
     assert frow["source_url"] == "https://found.example.com/p"
     assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
 
@@ -341,11 +403,11 @@ def test_process_row_cache_keyed_on_seed_url(tmp_path, monkeypatch):
     assert record["url"] == "https://found.example.com/p"
 
 
-def test_festival_id_format():
-    assert crawl.festival_id("연세대학교", 2026) == "연세대학교-2026"
+def test_import_key_format():
+    assert crawl.import_key("연세대학교", 2026) == "연세대학교-2026"
 
 
-def test_festival_id_links_festival_and_lineup():
+def test_import_key_links_festival_and_lineup():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
               "url": "https://example.com/post", "discovery": "manual",
@@ -353,8 +415,8 @@ def test_festival_id_links_festival_and_lineup():
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
     lrows = build_lineup_rows(record, {})
-    assert frow["festival_id"] == "연세대학교-2026"
-    assert [r["festival_id"] for r in lrows] == ["연세대학교-2026"] * 2
+    assert frow["import_key"] == "연세대학교-2026"
+    assert [r["import_key"] for r in lrows] == ["연세대학교-2026"] * 3
     assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
     assert list(lrows[0].keys()) == crawl.LINEUP_FIELDS
 
