@@ -3,7 +3,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from urllib import robotparser
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 import trafilatura
@@ -14,6 +14,7 @@ MIN_INTERVAL_SECONDS = 3.0
 TIMEOUT_SECONDS = 10
 MIN_BODY_CHARS = 100
 MAX_BODY_CHARS = 8000
+MAX_BODY_IMAGES = 5
 
 # 티스토리 스킨별 본문 컨테이너 후보 (순차 시도)
 BODY_SELECTORS = [
@@ -39,6 +40,7 @@ class FetchResult:
     poster_image_url: str | None = None
     error: str | None = None
     instagram_candidates: list[str] = field(default_factory=list)
+    image_urls: list[str] = field(default_factory=list)
 
 
 def _respect_rate_limit(host: str) -> None:
@@ -70,8 +72,12 @@ def _robots_allowed(url: str) -> bool:
     return True if rp is None else rp.can_fetch(USER_AGENT, url)
 
 
-def parse_html(html: str) -> tuple[str | None, str | None]:
-    """(본문 텍스트 or None, og:image URL or None). 본문 100자 미만이면 None."""
+def parse_html(html: str, base_url: str = "") -> tuple[str | None, str | None, list[str]]:
+    """(본문 텍스트 or None, og:image URL or None, 본문 이미지 URL 목록).
+
+    이미지는 본문 컨테이너 안의 <img>만 등장순으로 수집한다 (중복 제거, 최대 5장).
+    trafilatura 폴백으로 본문을 얻은 경우엔 컨테이너를 모르므로 빈 목록이다.
+    """
     soup = BeautifulSoup(html, "html.parser")
 
     og = None
@@ -79,13 +85,14 @@ def parse_html(html: str) -> tuple[str | None, str | None]:
     if meta and meta.get("content"):
         og = meta["content"].strip()
 
-    body = None
+    body, images = None, []
     for selector in BODY_SELECTORS:
         node = soup.select_one(selector)
         if node:
             text = node.get_text(separator="\n", strip=True)
             if len(text) >= MIN_BODY_CHARS:
                 body = text
+                images = _body_images(node, base_url)
                 break
 
     if body is None:
@@ -95,7 +102,23 @@ def parse_html(html: str) -> tuple[str | None, str | None]:
 
     if body is not None:
         body = body[:MAX_BODY_CHARS]
-    return body, og
+    return body, og, images
+
+
+def _body_images(node, base_url: str) -> list[str]:
+    urls: list[str] = []
+    for img in node.find_all("img"):
+        src = (img.get("src") or img.get("data-src") or "").strip()
+        if not src:
+            continue
+        absolute = urljoin(base_url, src)
+        if not absolute.startswith(("http://", "https://")):
+            continue
+        if absolute not in urls:
+            urls.append(absolute)
+        if len(urls) == MAX_BODY_IMAGES:
+            break
+    return urls
 
 
 def instagram_candidates(html: str) -> list[str]:
@@ -152,8 +175,9 @@ def fetch_body(url: str) -> FetchResult:
     if html is None:
         return FetchResult(status="fetch_failed", error=last_error)
 
-    body, og = parse_html(html)
+    body, og, images = parse_html(html, base_url=url)
     candidates = instagram_candidates(html)
     if body is None:
         return FetchResult(status="empty_body", poster_image_url=og, instagram_candidates=candidates)
-    return FetchResult(status="ok", body=body, poster_image_url=og, instagram_candidates=candidates)
+    return FetchResult(status="ok", body=body, poster_image_url=og,
+                       image_urls=images, instagram_candidates=candidates)

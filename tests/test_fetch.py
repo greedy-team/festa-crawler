@@ -12,7 +12,7 @@ def read(name: str) -> str:
 
 
 def test_parse_html_extracts_body_and_og_image():
-    body, og = parse_html(read("tistory_sample.html"))
+    body, og, images = parse_html(read("tistory_sample.html"))
     assert body is not None
     assert "아카라카" in body
     assert "잔나비" in body
@@ -20,7 +20,7 @@ def test_parse_html_extracts_body_and_og_image():
 
 
 def test_parse_html_image_only_returns_no_body():
-    body, og = parse_html(read("image_only.html"))
+    body, og, images = parse_html(read("image_only.html"))
     # 본문 100자 미만 → None (empty_body 판정은 호출부)
     assert body is None
     assert og == "https://example.com/poster2.jpg"
@@ -32,9 +32,37 @@ def test_parse_html_truncates_to_8000_chars():
         + "가나다라마바사아자차" * 2000   # 20,000자
         + "</div></body></html>"
     )
-    body, _ = parse_html(long_html)
+    body, _, _ = parse_html(long_html)
     assert body is not None
     assert len(body) <= 8000
+
+
+def test_parse_html_collects_body_images():
+    html = ('<div class="entry-content">' + "본문" * 60
+            + '<img src="https://cdn.example.com/a.jpg">'
+            + '<img data-src="/relative/b.jpg">'
+            + '<img src="https://cdn.example.com/a.jpg">'   # 중복
+            + '<img src="">'
+            + "</div>")
+    body, og, images = parse_html(html, base_url="https://blog.example.com/post")
+    assert images == ["https://cdn.example.com/a.jpg",
+                      "https://blog.example.com/relative/b.jpg"]
+
+
+def test_parse_html_caps_images_at_five():
+    imgs = "".join(f'<img src="https://cdn.example.com/{i}.jpg">' for i in range(8))
+    html = '<div class="entry-content">' + "본문" * 60 + imgs + "</div>"
+    _, _, images = parse_html(html, base_url="https://blog.example.com/")
+    assert len(images) == 5
+
+
+def test_parse_html_fallback_has_no_images(monkeypatch):
+    # 셀렉터가 못 잡아 trafilatura 폴백으로 본문을 얻은 경우 이미지는 빈 리스트
+    monkeypatch.setattr(fetch.trafilatura, "extract", lambda html: "본문" * 60)
+    html = "<p>" + "본문" * 60 + '<img src="https://cdn.example.com/a.jpg"></p>'
+    body, og, images = parse_html(html)
+    assert body is not None
+    assert images == []
 
 
 def test_rate_limit_sleeps_between_same_host(monkeypatch):
