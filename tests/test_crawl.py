@@ -442,6 +442,47 @@ def test_process_row_keeps_old_ok_cache_when_recollect_fails(tmp_path, monkeypat
     assert after == before                                    # 캐시 파일은 그대로 — 다음 실행에서 재시도
 
 
+def test_process_row_keeps_old_ok_cache_on_transient_discovery_failure(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    old = {"university": "연세대학교", "campus": "신촌캠퍼스",
+           "region": "서울 서대문구", "year": 2026,
+           "seed_url": "https://example.com/post", "url": "https://example.com/post",
+           "discovery": "manual", "flag": "ok", "poster_image_url": None,
+           "extraction": _extraction().model_dump()}
+    before = json.dumps(old)
+    (raw_dir / "연세대학교.json").write_text(before, "utf-8")
+    monkeypatch.setattr(crawl, "fetch_body",
+                        lambda url: FetchResult(status="fetch_failed", error="410"))
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: None)   # 탐색 자체 실패(조기 반환 경로)
+    record = process_row(_row(), tmp_path)
+    assert record["flag"] == "ok"                             # 구 데이터 유지
+    assert record["extraction"] is not None
+    after = (raw_dir / "연세대학교.json").read_text("utf-8")
+    assert after == before                                    # 캐시 파일은 그대로 — 다음 실행에서 재시도
+
+
+def test_process_row_keeps_old_ok_cache_on_mismatch(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    old = {"university": "연세대학교", "campus": "신촌캠퍼스",
+           "region": "서울 서대문구", "year": 2026,
+           "seed_url": "https://example.com/post", "url": "https://example.com/post",
+           "discovery": "manual", "flag": "ok", "poster_image_url": None,
+           "extraction": _extraction().model_dump()}
+    before = json.dumps(old)
+    (raw_dir / "연세대학교.json").write_text(before, "utf-8")
+    wrong = _extraction().model_copy(update={"year": 2024})
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: wrong)
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    record = process_row(_row(), tmp_path)
+    assert record["flag"] == "ok"                             # mismatch가 구 데이터를 덮지 않는다
+    assert record["extraction"] is not None
+    after = (raw_dir / "연세대학교.json").read_text("utf-8")
+    assert after == before                                    # 캐시 파일은 그대로 — 다음 실행에서 재시도
+
+
 def test_process_row_new_records_carry_schema_version(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
         status="ok", body="본문" * 100, image_urls=["https://cdn.example.com/1.jpg"]))
