@@ -37,6 +37,8 @@ def load_universities(path: Path) -> list[UniversityRow]:
     return rows
 
 
+SCHEMA_VERSION = 2
+
 FESTIVAL_FIELDS = [
     "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
     "poster_url", "image_urls", "description", "hashtags",
@@ -97,20 +99,28 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
     raw_dir = out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     cache_path = raw_dir / f"{row.university}.json"
+    stale_ok = None
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached.get("seed_url") == row.url and cached.get("year") == row.year:
+        if (cached.get("schema_version") == SCHEMA_VERSION
+                and cached.get("seed_url") == row.url
+                and cached.get("year") == row.year):
             # 시드 전용 필드는 현재 행 기준으로 갱신 (추출 결과에는 영향 없음)
             cached["campus"] = row.campus
             cached["region"] = row.region
             return cached
-        # 시드 URL 또는 연도가 바뀌었으면 캐시 무시하고 다시 처리 (아래에서 덮어씀)
+        if cached.get("flag") == "ok":
+            # 구 스키마(또는 시드 변경)의 성공 캐시 — 재수집 실패 시 폴백으로 쓴다.
+            # 재실행은 복원이지 파괴가 아니다 (DEC-0028 원칙).
+            stale_ok = cached
 
     record = {
+        "schema_version": SCHEMA_VERSION,
         "university": row.university, "campus": row.campus,
         "region": row.region, "year": row.year,
         "seed_url": row.url, "url": row.url, "discovery": "",
-        "flag": "no_source", "poster_image_url": None, "image_urls": [], "extraction": None,
+        "flag": "no_source", "poster_image_url": None, "image_urls": [],
+        "extraction": None,
     }
 
     if row.url is not None:
@@ -125,15 +135,28 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
             candidates = discover_cached(row.university, row.year, out_dir)
             if candidates is None:
                 # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
-                return record
+                return _keep_stale_on_failure(record, stale_ok, row)
             if not _try_candidates(candidates, row, record, "search"):
                 # 어느 후보도 verify를 통과하지 못함
                 if row.url is None:
                     record["flag"] = "no_candidate"
 
+    result = _keep_stale_on_failure(record, stale_ok, row)
+    if result is stale_ok:
+        return result       # 구 캐시 파일은 그대로 둔다 — 다음 실행에서 다시 시도
     if record["flag"] not in ("fetch_failed", "extract_failed"):
         cache_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return record
+
+
+def _keep_stale_on_failure(record: dict, stale_ok: dict | None, row: UniversityRow) -> dict:
+    """재수집이 실패했고 구 성공 캐시가 있으면 구 데이터를 지키는 쪽을 택한다."""
+    if record["flag"] == "ok" or stale_ok is None:
+        return record
+    stale_ok["campus"] = row.campus
+    stale_ok["region"] = row.region
+    print("  -> 재수집 실패, 이전 결과 유지", flush=True)
+    return stale_ok
 
 
 def build_festival_row(record: dict) -> dict:

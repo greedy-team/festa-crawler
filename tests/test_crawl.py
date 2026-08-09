@@ -60,7 +60,7 @@ def test_process_row_happy_path_writes_cache(tmp_path, monkeypatch):
 def test_process_row_uses_cache(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    cached = {"university": "연세대학교", "campus": "신촌캠퍼스",
+    cached = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
               "seed_url": "https://example.com/post", "url": "https://example.com/post",
               "discovery": "manual", "flag": "ok", "poster_image_url": None,
@@ -101,7 +101,7 @@ def test_process_row_refetches_when_cached_year_differs(tmp_path, monkeypatch):
 def test_process_row_cache_hit_refreshes_campus_region(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    cached = {"university": "연세대학교", "campus": "옛캠퍼스",
+    cached = {"schema_version": 2, "university": "연세대학교", "campus": "옛캠퍼스",
               "region": "서울 옛구", "year": 2026,
               "seed_url": "https://example.com/post", "url": "https://example.com/post",
               "discovery": "manual", "flag": "ok", "poster_image_url": None,
@@ -388,7 +388,8 @@ def test_build_festival_row_includes_discovery():
 def test_process_row_cache_keyed_on_seed_url(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    cached = {"university": "연세대학교", "campus": "신촌캠퍼스", "region": "서울 서대문구",
+    cached = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구",
               "year": 2026, "seed_url": None, "url": "https://found.example.com/p",
               "discovery": "search", "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
@@ -401,6 +402,53 @@ def test_process_row_cache_keyed_on_seed_url(tmp_path, monkeypatch):
     record = process_row(_row(url=None), tmp_path)   # 시드 url=None, 캐시의 seed_url도 None
     assert record["flag"] == "ok"
     assert record["url"] == "https://found.example.com/p"
+
+
+def test_process_row_recollects_versionless_cache(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    old = {"university": "연세대학교", "campus": "신촌캠퍼스",
+           "region": "서울 서대문구", "year": 2026,
+           "seed_url": "https://example.com/post", "url": "https://example.com/post",
+           "discovery": "manual", "flag": "ok", "poster_image_url": None,
+           "extraction": _extraction().model_dump()}          # schema_version 없음 = 구 스키마
+    (raw_dir / "연세대학교.json").write_text(json.dumps(old), "utf-8")
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100, image_urls=[]))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+    record = process_row(_row(), tmp_path)
+    assert record["schema_version"] == crawl.SCHEMA_VERSION
+    cached = json.loads((raw_dir / "연세대학교.json").read_text("utf-8"))
+    assert cached["schema_version"] == crawl.SCHEMA_VERSION   # 새 캐시로 갱신됨
+
+
+def test_process_row_keeps_old_ok_cache_when_recollect_fails(tmp_path, monkeypatch):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    old = {"university": "연세대학교", "campus": "신촌캠퍼스",
+           "region": "서울 서대문구", "year": 2026,
+           "seed_url": "https://example.com/post", "url": "https://example.com/post",
+           "discovery": "manual", "flag": "ok", "poster_image_url": None,
+           "extraction": _extraction().model_dump()}
+    before = json.dumps(old)
+    (raw_dir / "연세대학교.json").write_text(before, "utf-8")
+    monkeypatch.setattr(crawl, "fetch_body",
+                        lambda url: FetchResult(status="fetch_failed", error="410"))
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    record = process_row(_row(), tmp_path)
+    assert record["flag"] == "ok"                             # 구 데이터 유지
+    assert record["extraction"] is not None
+    after = (raw_dir / "연세대학교.json").read_text("utf-8")
+    assert after == before                                    # 캐시 파일은 그대로 — 다음 실행에서 재시도
+
+
+def test_process_row_new_records_carry_schema_version(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100, image_urls=["https://cdn.example.com/1.jpg"]))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+    record = process_row(_row(), tmp_path)
+    assert record["schema_version"] == crawl.SCHEMA_VERSION
+    assert record["image_urls"] == ["https://cdn.example.com/1.jpg"]
 
 
 def test_import_key_format():

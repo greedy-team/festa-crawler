@@ -25,6 +25,7 @@ def _seed_year(base_dir: Path, year: int, names: list[str]) -> None:
     raw_dir = ydir / "raw"
     raw_dir.mkdir(parents=True)
     (raw_dir / "연세대학교.json").write_text(json.dumps({
+        "schema_version": crawl.SCHEMA_VERSION,
         "university": "연세대학교", "campus": "신촌캠퍼스", "region": "서울 서대문구",
         "year": year, "url": "https://example.com/post", "flag": "ok",
         "poster_image_url": None,
