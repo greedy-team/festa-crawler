@@ -9,9 +9,11 @@ from pydantic import ValidationError
 from crawl import (LINEUP_FIELDS, OUTPUT_BASE, load_artist_mapping,
                    save_artist_mapping, write_csv)
 from extract import ExtractError, _extract_json, call_claude
-from schema import ArtistMaster, EnrichResult
+from schema import ArtistMaster, EnrichResult, GenreResult
 
 ARTIST_FIELDS = ["name", "other_names", "genre", "image_url", "needs_review"]
+OLD_ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
+                     "aliases", "needs_review"]
 
 ENRICH_TIMEOUT_SECONDS = 900  # 실측 578초(대량 배치 정규화) + 여유
 
@@ -24,11 +26,16 @@ PROMPT_TEMPLATE = """다음은 대학 축제 라인업에서 추출한 아티스
   needs_review를 true로 표시하세요. 절대 추측으로 채우지 마세요.
 - mapping에는 입력 목록의 모든 표기가 키로 들어가야 합니다.
 - 설명 없이 JSON 객체 하나만 출력하세요.
+- other_names에는 별칭·영문 표기·본명 등 그 아티스트를 가리키는 다른 표기를
+  모두 넣습니다 (name과 같은 표기는 제외).
+- genre는 HIPHOP / BALLAD_RNB / DANCE / BAND 중 확실한 것만 채우고,
+  모르거나 넷에 안 맞으면 null로 둡니다.
 
 스키마:
 {{"mapping": {{"원문표기": "정식표기"}},
-  "artists": [{{"name_canonical": str, "name_en": str|null, "real_name": str|null,
-               "category": str|null, "aliases": [str], "needs_review": bool}}]}}
+  "artists": [{{"name": str, "other_names": [str],
+               "genre": "HIPHOP"|"BALLAD_RNB"|"DANCE"|"BAND"|null,
+               "needs_review": bool}}]}}
 {known_block}
 아티스트 표기 목록:
 {names}"""
@@ -102,6 +109,57 @@ def _merge_artists(base_dir: Path, artists: list[ArtistMaster]) -> None:
     write_csv(path, ARTIST_FIELDS, rows)
 
 
+GENRE_PROMPT = """다음 아티스트들의 장르를 분류하세요.
+
+규칙:
+- HIPHOP / BALLAD_RNB / DANCE / BAND 중 확실한 것만 채우고, 모르거나 넷에 안 맞으면 null.
+- 절대 추측으로 채우지 마세요.
+- 설명 없이 JSON 객체 하나만 출력하세요: {{"genres": {{"아티스트명": "HIPHOP"|null}}}}
+
+아티스트 목록:
+{names}"""
+
+
+def classify_genres(names: list[str]) -> dict[str, str | None]:
+    """아티스트 name 목록의 장르를 LLM 1콜로 분류한다. 실패하면 예외가 전파돼 중단된다."""
+    if not names:
+        return {}
+    raw = call_claude(GENRE_PROMPT.format(names="\n".join(f"- {n}" for n in names)),
+                      timeout=ENRICH_TIMEOUT_SECONDS)
+    return GenreResult.model_validate_json(_extract_json(raw)).genres
+
+
+def _migrate_artists_csv(base_dir: Path) -> None:
+    """구 스키마 artists.csv를 새 컬럼으로 1회 변환한다 (genre는 LLM 1콜로 분류).
+
+    변환 실패 시 파일은 건드리지 않으므로 다음 실행에서 다시 시도된다.
+    """
+    path = base_dir / "artists.csv"
+    if not path.exists():
+        return
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames != OLD_ARTIST_FIELDS:
+            return
+        old_rows = list(reader)
+    genres = classify_genres([r["name_canonical"] for r in old_rows])
+    rows = []
+    for r in old_rows:
+        name = r["name_canonical"]
+        others = [x for x in [r["name_en"], r["real_name"]] + r["aliases"].split(";")
+                  if x and x != name]
+        rows.append({
+            "name": name,
+            "other_names": "|".join(dict.fromkeys(others)),   # 순서 유지 중복 제거
+            "genre": genres.get(name) or "",
+            "image_url": "",
+            "needs_review": r["needs_review"],
+        })    # 구 category는 버린다 — 장르로 일원화
+    write_csv(path, ARTIST_FIELDS, rows)
+    print(f"artists.csv 마이그레이션 완료: {len(rows)}명, "
+          f"genre 분류 {sum(1 for r in rows if r['genre'])}건")
+
+
 def _refresh_lineups(ydirs: list[Path], mapping: dict[str, str]) -> None:
     """모든 연도의 lineup.csv를 현재 매핑에 맞춰 다시 쓴다 (매핑에 없는 표기는 원문 유지)."""
     for ydir in ydirs:
@@ -116,6 +174,7 @@ def _refresh_lineups(ydirs: list[Path], mapping: dict[str, str]) -> None:
 
 
 def enrich(base_dir: Path) -> None:
+    _migrate_artists_csv(base_dir)
     names = collect_raw_names(base_dir)
     if not names:
         print("정규화할 아티스트 없음 — 건너뜀")
@@ -133,7 +192,7 @@ def enrich(base_dir: Path) -> None:
             header = csv.DictReader(f).fieldnames
         if header != LINEUP_FIELDS:
             raise SystemExit(
-                f"{lineup_path} 가 예전 스키마입니다 (festival_id 없음) — "
+                f"{lineup_path} 가 예전 스키마입니다 (import_key 없음) — "
                 "crawl.py를 먼저 다시 실행해 새 스키마로 재생성하세요."
             )
 

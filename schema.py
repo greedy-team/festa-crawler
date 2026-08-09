@@ -46,6 +46,10 @@ class EnrichResult(BaseModel):
     artists: list[ArtistMaster]
 
 
+class GenreResult(BaseModel):
+    genres: dict[str, Genre | None]
+
+
 class Candidate(BaseModel):
     url: str
     title: str | None = None

@@ -7,7 +7,7 @@ import pytest
 import crawl
 import enrich
 from crawl import LINEUP_FIELDS, write_csv
-from schema import EnrichResult
+from schema import ArtistMaster, EnrichResult
 from test_crawl import _seed_row, _write_seed
 
 ENRICH_JSON = """{
@@ -251,3 +251,50 @@ def test_enrich_then_crawl_keeps_normalized_names(tmp_path, monkeypatch):
         rows = list(csv.DictReader(f))
     assert rows[0]["artist_raw"] == "십센치"
     assert rows[0]["artist_canonical"] == "10CM"
+
+
+def test_migrate_artists_csv_converts_old_schema(tmp_path, monkeypatch):
+    old_header = "name_canonical,name_en,real_name,category,aliases,needs_review\n"
+    (tmp_path / "artists.csv").write_text(
+        old_header + "10CM,10CM,권정열,가수,십센치;십cm,false\n", encoding="utf-8-sig")
+    monkeypatch.setattr(enrich, "classify_genres", lambda names: {"10CM": "BAND"})
+    enrich._migrate_artists_csv(tmp_path)
+    with open(tmp_path / "artists.csv", newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert list(rows[0]) == enrich.ARTIST_FIELDS
+    # name과 같은 표기(10CM)는 별칭에서 제외, 나머지는 | 로 병합
+    assert rows[0]["name"] == "10CM"
+    assert rows[0]["other_names"] == "권정열|십센치|십cm"
+    assert rows[0]["genre"] == "BAND"
+    assert rows[0]["image_url"] == ""
+    assert rows[0]["needs_review"] == "false"
+    assert "category" not in rows[0]          # 장르로 일원화 — category는 버린다
+
+
+def test_migrate_artists_csv_noop_on_new_schema(tmp_path, monkeypatch):
+    new_header = ",".join(enrich.ARTIST_FIELDS) + "\n"
+    content = new_header + "10CM,십센치,BAND,,false\n"
+    (tmp_path / "artists.csv").write_text(content, encoding="utf-8-sig")
+
+    def boom(names):
+        raise AssertionError("새 스키마면 LLM을 부르면 안 됨")
+
+    monkeypatch.setattr(enrich, "classify_genres", boom)
+    enrich._migrate_artists_csv(tmp_path)
+    assert (tmp_path / "artists.csv").read_text(encoding="utf-8-sig") == content
+
+
+def test_classify_genres_parses_llm_response(monkeypatch):
+    monkeypatch.setattr(enrich, "call_claude",
+                        lambda prompt, timeout=900: '{"genres": {"10CM": "BAND", "낯선가수": null}}')
+    assert enrich.classify_genres(["10CM", "낯선가수"]) == {"10CM": "BAND", "낯선가수": None}
+
+
+def test_merge_artists_writes_new_columns(tmp_path):
+    enrich._merge_artists(tmp_path, [ArtistMaster(
+        name="10CM", other_names=["십센치"], genre="BAND")])
+    with open(tmp_path / "artists.csv", newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert rows[0]["name"] == "10CM"
+    assert rows[0]["other_names"] == "십센치"
+    assert rows[0]["genre"] == "BAND"
