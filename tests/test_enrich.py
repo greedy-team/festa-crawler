@@ -13,10 +13,8 @@ from test_crawl import _seed_row, _write_seed
 ENRICH_JSON = """{
   "mapping": {"십센치": "10CM", "잔나비": "잔나비"},
   "artists": [
-    {"name": "10CM", "other_names": ["십센치"], "name_en": "10CM", "real_name": "권정열",
-     "category": "가수", "needs_review": false},
-    {"name": "잔나비", "other_names": [], "name_en": "JANNABI", "real_name": null,
-     "category": "밴드", "needs_review": false}
+    {"name": "10CM", "other_names": ["십센치"], "genre": null, "needs_review": false},
+    {"name": "잔나비", "other_names": [], "genre": null, "needs_review": false}
   ]
 }"""
 
@@ -109,15 +107,14 @@ def test_enrich_updates_every_year_lineup(tmp_path, monkeypatch):
 def test_enrich_accumulates_artists_csv(tmp_path, monkeypatch):
     _seed_year(tmp_path, 2026, ["십센치"])
     write_csv(tmp_path / "artists.csv", enrich.ARTIST_FIELDS, [
-        {"name_canonical": "아이유", "name_en": "IU", "real_name": "이지은",
-         "category": "가수", "aliases": "", "needs_review": "false"},
+        {"name": "아이유", "other_names": "", "genre": "", "image_url": "", "needs_review": "false"},
     ])
     monkeypatch.setattr(enrich, "call_claude",
                         lambda prompt, timeout=120: ENRICH_JSON)
     enrich.enrich(tmp_path)
 
     with open(tmp_path / "artists.csv", newline="", encoding="utf-8-sig") as f:
-        names = {r["name_canonical"] for r in csv.DictReader(f)}
+        names = {r["name"] for r in csv.DictReader(f)}
     assert names == {"아이유", "10CM", "잔나비"}    # 기존 행이 살아 있다
 
 
@@ -145,9 +142,8 @@ def test_enrich_updates_lineup_and_writes_artists(tmp_path, monkeypatch):
     assert rows[0]["artist_raw"] == "십센치"     # 원문 표기는 보존
 
     with open(tmp_path / "artists.csv", newline="", encoding="utf-8-sig") as f:
-        artists = {r["name_canonical"]: r for r in csv.DictReader(f)}
-    assert artists["10CM"]["real_name"] == "권정열"
-    assert artists["10CM"]["aliases"] == "십센치"
+        artists = {r["name"]: r for r in csv.DictReader(f)}
+    assert artists["10CM"]["other_names"] == "십센치"
     assert artists["잔나비"]["needs_review"] == "false"
 
 

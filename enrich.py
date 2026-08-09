@@ -11,8 +11,7 @@ from crawl import (LINEUP_FIELDS, OUTPUT_BASE, load_artist_mapping,
 from extract import ExtractError, _extract_json, call_claude
 from schema import ArtistMaster, EnrichResult
 
-ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
-                 "aliases", "needs_review"]
+ARTIST_FIELDS = ["name", "other_names", "genre", "image_url", "needs_review"]
 
 ENRICH_TIMEOUT_SECONDS = 900  # 실측 578초(대량 배치 정규화) + 여유
 
@@ -88,18 +87,15 @@ def _merge_artists(base_dir: Path, artists: list[ArtistMaster]) -> None:
     if path.exists():
         with open(path, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.DictReader(f))
-    known = {r["name_canonical"] for r in rows}
+    known = {r["name"] for r in rows}
     for a in artists:
         if a.name in known:
             continue
-        # 미처리: 하위호환성을 위해 extra 필드에서 읽기
-        extra = a.__pydantic_extra__ or {}
         rows.append({
-            "name_canonical": a.name,
-            "name_en": extra.get("name_en", ""),
-            "real_name": extra.get("real_name", ""),
-            "category": a.category or "",
-            "aliases": ";".join(a.other_names),
+            "name": a.name,
+            "other_names": "|".join(a.other_names),
+            "genre": a.genre or "",
+            "image_url": "",
             "needs_review": "true" if a.needs_review else "false",
         })
         known.add(a.name)

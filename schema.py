@@ -1,7 +1,7 @@
 """추출 결과 및 아티스트 마스터의 pydantic 모델."""
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 ExternalVisitorPolicy = Literal["ALLOWED", "CONDITIONAL", "DENIED"]
 VerificationMethod = Literal["NONE", "STUDENT_ID", "PRE_BOOKING", "INVITATION", "OTHER"]
@@ -35,12 +35,9 @@ class ExtractionResult(BaseModel):
 
 
 class ArtistMaster(BaseModel):
-    model_config = ConfigDict(extra='allow')
-
     name: str
     other_names: list[str] = Field(default_factory=list)
     genre: Genre | None = None
-    category: str | None = None
     needs_review: bool = False
 
 

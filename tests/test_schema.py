@@ -59,7 +59,7 @@ def test_enrich_result_parse():
         "mapping": {"십센치": "10CM", "10cm": "10CM"},
         "artists": [
             {"name": "10CM", "other_names": ["십센치", "권정열"],
-             "genre": "BAND", "category": "가수", "needs_review": False}
+             "genre": "BAND", "needs_review": False}
         ],
     }
     result = EnrichResult.model_validate(data)
