@@ -90,17 +90,19 @@ def _merge_artists(base_dir: Path, artists: list[ArtistMaster]) -> None:
             rows = list(csv.DictReader(f))
     known = {r["name_canonical"] for r in rows}
     for a in artists:
-        if a.name_canonical in known:
+        if a.name in known:
             continue
+        # 미처리: 하위호환성을 위해 extra 필드에서 읽기
+        extra = a.__pydantic_extra__ or {}
         rows.append({
-            "name_canonical": a.name_canonical,
-            "name_en": a.name_en or "",
-            "real_name": a.real_name or "",
+            "name_canonical": a.name,
+            "name_en": extra.get("name_en", ""),
+            "real_name": extra.get("real_name", ""),
             "category": a.category or "",
-            "aliases": ";".join(a.aliases),
+            "aliases": ";".join(a.other_names),
             "needs_review": "true" if a.needs_review else "false",
         })
-        known.add(a.name_canonical)
+        known.add(a.name)
     write_csv(path, ARTIST_FIELDS, rows)
 
 

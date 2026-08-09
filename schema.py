@@ -1,12 +1,17 @@
 """추출 결과 및 아티스트 마스터의 pydantic 모델."""
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+ExternalVisitorPolicy = Literal["ALLOWED", "CONDITIONAL", "DENIED"]
+VerificationMethod = Literal["NONE", "STUDENT_ID", "PRE_BOOKING", "INVITATION", "OTHER"]
+TicketType = Literal["FREE", "PAID"]
+Genre = Literal["HIPHOP", "BALLAD_RNB", "DANCE", "BAND"]
 
 
 class LineupItem(BaseModel):
     artist_raw: str
-    day_label: str | None = None
-    date: str | None = None
-    time: str | None = None
+    day: int | None = None
     is_secret: bool = False
 
 
@@ -18,18 +23,24 @@ class ExtractionResult(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     venue_name: str | None = None
-    outsider_admission: str | None = None
-    ticket_info: str | None = None
+    description: str | None = None
+    hashtags: list[str] = Field(default_factory=list)
+    external_visitor_policy: ExternalVisitorPolicy | None = None
+    verification_method: VerificationMethod | None = None
+    ticket_type: TicketType | None = None
+    ticket_open_at: str | None = None
+    admission_raw: str | None = None
     instagram_handle: str | None = None
     lineup: list[LineupItem] = Field(default_factory=list)
 
 
 class ArtistMaster(BaseModel):
-    name_canonical: str
-    name_en: str | None = None
-    real_name: str | None = None
+    model_config = ConfigDict(extra='allow')
+
+    name: str
+    other_names: list[str] = Field(default_factory=list)
+    genre: Genre | None = None
     category: str | None = None
-    aliases: list[str] = Field(default_factory=list)
     needs_review: bool = False
 
 

@@ -13,10 +13,10 @@ from test_crawl import _seed_row, _write_seed
 ENRICH_JSON = """{
   "mapping": {"십센치": "10CM", "잔나비": "잔나비"},
   "artists": [
-    {"name_canonical": "10CM", "name_en": "10CM", "real_name": "권정열",
-     "category": "가수", "aliases": ["십센치"], "needs_review": false},
-    {"name_canonical": "잔나비", "name_en": "JANNABI", "real_name": null,
-     "category": "밴드", "aliases": [], "needs_review": false}
+    {"name": "10CM", "other_names": ["십센치"], "name_en": "10CM", "real_name": "권정열",
+     "category": "가수", "needs_review": false},
+    {"name": "잔나비", "other_names": [], "name_en": "JANNABI", "real_name": null,
+     "category": "밴드", "needs_review": false}
   ]
 }"""
 
@@ -222,9 +222,8 @@ def test_enrich_ignores_mapping_keys_not_sent(tmp_path, monkeypatch):
     # 새 이름은 "잔나비" 하나뿐인데 응답이 기존 키("십센치")까지 다시 매핑한다
     rogue = json.dumps({
         "mapping": {"잔나비": "JANNABI", "십센치": "십센치"},
-        "artists": [{"name_canonical": "JANNABI", "name_en": "JANNABI",
-                     "real_name": None, "category": "밴드", "aliases": [],
-                     "needs_review": False}],
+        "artists": [{"name": "JANNABI", "other_names": [], "name_en": "JANNABI", "real_name": None,
+                     "category": "밴드", "needs_review": False}],
     }, ensure_ascii=False)
     monkeypatch.setattr(enrich, "call_claude", lambda prompt, timeout=120: rogue)
     enrich.enrich(tmp_path)
