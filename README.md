@@ -10,6 +10,9 @@ CSV는 백엔드 어드민에 첨부해 가공·발행한다.
 
 ## 파이프라인
 
+색이 곧 담당이다. **파란 상자는 파이썬이 하는 일**, **보라 상자는 구독 `claude` CLI를 부르는
+지점**이다. LLM은 세 곳에만 들어간다 — 탐색·추출·정규화.
+
 ```mermaid
 flowchart TD
     seed["universities-2026.csv<br/>대학 29곳 시드"] --> has{"시드에 URL이<br/>적혀 있나?"}
@@ -19,11 +22,11 @@ flowchart TD
 
     manual --> mok{"성공?"}
     mok -->|"ok"| adopted["출처 확정<br/>discovery = manual"]
-    mok -->|"실패"| sm["사이트맵 후보<br/>정식 표기 + 연도 매칭"]
+    mok -->|"실패"| sm["사이트맵 후보<br/>정식 표기 + 연도 매칭<br/>(문자열 매칭, LLM 없음)"]
 
     sm --> smok{"verify 통과한<br/>후보가 있나?"}
     smok -->|"있음"| adoptedM["출처 확정<br/>discovery = sitemap"]
-    smok -->|"없음"| search["discover.py<br/>웹 검색으로 후보 수집"]
+    smok -->|"없음"| search["discover.py<br/>웹 검색으로 후보 수집<br/>🟣 LLM 1콜 (도구 ON)"]
 
     search --> cand["후보를 순서대로<br/>최대 3개 시도"]
     cand --> cok{"verify 통과한<br/>후보가 있나?"}
@@ -35,38 +38,71 @@ flowchart TD
     adoptedS --> csv
     failed --> csv
 
-    csv --> enrich["enrich.py<br/>아티스트 표기 정규화"]
-    enrich --> artists["artists.csv"]
+    csv --> enrich["enrich.py<br/>아티스트 표기 정규화 + 장르<br/>🟣 LLM 1콜 (전체 배치)"]
+    enrich --> artists["artists.csv<br/>artist_mapping.json"]
 
     csv --> review["admin.sh<br/>관리자 페이지 (로컬)"]
     artists --> review
-    review --> admin["백엔드 어드민에 CSV 첨부<br/>→ 가공·발행"]
+    review --> admin["백엔드 번들 업로드 API에<br/>CSV 3종 첨부 → 가공·발행"]
 
-    admin -.-> note["아직 미구현<br/>백엔드는 스켈레톤 상태"]
+    manual -.-> u
+    cand -.-> u
+    u["URL 1건 처리<br/>🟣 추출 LLM 1콜 포함<br/>(아래 그림)"]
+
+    classDef llm fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
+    classDef py fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
+    class search,enrich,u llm
+    class seed,manual,sm,cand,adopted,adoptedM,adoptedS,failed,csv,artists,review py
 ```
 
-크롤러의 책임은 **검토를 마친 CSV까지**다. 그 뒤 적재·가공·발행은 백엔드 어드민 소관이며,
-현재 백엔드에는 해당 기능이 없다 — 지금은 CSV가 최종 산출물이다.
+크롤러의 책임은 **검토를 마친 CSV까지**다. 그 뒤 적재·가공·발행은 백엔드 어드민 소관이다.
 
 산출물 3종의 컬럼·값 형식은 백엔드 **크롤링 번들 업로드 API** 명세의 CSV 스펙에 맞춰져
 있어, 검토를 마친 파일을 그대로 업로드하면 된다. 전환 설계는
 [`2026-08-09-bundle-spec-migration-design.md`](./2026-08-09-bundle-spec-migration-design.md) 참고.
 
-**URL 1건을 처리하는 과정**은 출처가 수동이든 사이트맵이든 검색이든 동일하다.
+**URL 1건을 처리하는 과정**은 출처가 수동이든 사이트맵이든 검색이든 동일하다. 여기서도
+LLM은 가운데 한 칸뿐이고, 그 앞뒤는 전부 파이썬이다.
 
 ```mermaid
 flowchart LR
     url["URL"] --> robots["robots.txt 확인<br/>동일 호스트 3초 간격"]
-    robots --> body["본문 추출<br/>셀렉터 → trafilatura 폴백"]
-    body --> llm["claude -p<br/>구조화 추출 (JSON)"]
-    llm --> ver{"verify<br/>이 글이 정말<br/>그 대학·그 연도인가?"}
+    robots --> body["본문 추출 + 이미지 수집<br/>셀렉터 → trafilatura 폴백"]
+    body --> llm["claude -p<br/>구조화 추출 (JSON)<br/>🟣 LLM 1콜 (도구 OFF)"]
+    llm --> valid{"스키마 검증<br/>pydantic"}
+    valid -->|"실패"| retry["1회 재시도<br/>→ extract_failed"]
+    valid -->|"통과"| ver{"verify<br/>이 글이 정말<br/>그 대학·그 연도인가?"}
     ver -->|"통과"| ok["ok"]
     ver -->|"불일치"| mis["mismatch"]
+
+    classDef llm fill:#ede9fe,stroke:#7c3aed,color:#4c1d95
+    classDef py fill:#eff6ff,stroke:#2563eb,color:#1e3a8a
+    class llm llm
+    class url,robots,body,retry,ok,mis py
 ```
 
-마지막 `verify` 단계가 검색 탐색의 안전장치다. LLM이 URL을 지어내도 열리지 않으면 탈락하고,
-엉뚱한 대학 글이면 `mismatch`로 걸러진다. 그래서 검색이 지저분한 후보를 주더라도 잘못된
-출처가 채택될 여지가 작다.
+**LLM은 판정하지 않는다.** 스키마 검증(pydantic)도 `verify`도 파이썬이 한다 — LLM은 본문을
+JSON으로 바꾸는 일만 하고, 그 결과가 쓸 만한지는 코드가 정한다. 이 마지막 `verify`가 검색
+탐색의 안전장치다. LLM이 URL을 지어내도 열리지 않으면 탈락하고, 엉뚱한 대학 글이면
+`mismatch`로 걸러진다.
+
+### 파이썬이 하는 일 / LLM이 하는 일
+
+| | 파이썬 | 구독 `claude` CLI |
+| --- | --- | --- |
+| 출처 찾기 | 시드 읽기, 사이트맵 문자열 매칭, 차단 도메인 제외, 후보 순서 결정 | 웹 검색으로 후보 URL 수집 (`discover`) |
+| 수집 | robots 확인, 요청 간격, 재시도, 본문·이미지 추출 | — |
+| 구조화 | 스키마 검증, 재시도 판정, `verify`, flag 부여 | 본문 → JSON (`extract`) |
+| 정규화 | 매핑 누적, 이미 매핑된 이름 제외, CSV 반영 | 표기 통합 + 장르 분류 (`enrich`) |
+| 산출 | 컬럼 변환, 열거값 대문자화, 원자적 쓰기, 캐시 판정 | — |
+
+**LLM에게 맡기는 것은 "글을 읽는 일"뿐이다.** 무엇을 채택할지, 무엇을 실패로 볼지, 무엇을
+저장할지는 전부 파이썬이 정한다. 그래서 LLM이 이상한 답을 줘도 파이프라인이 그것을 그대로
+산출물에 싣지 않는다.
+
+호출은 `extract.call_claude` 하나를 지난다. 도구는 탐색에서만 켜고(`WebSearch`), 신뢰할 수
+없는 블로그 본문을 읽는 추출·정규화에서는 전부 차단한다. 각 호출의 비용은
+[시간 비용](#시간-비용) 참고.
 
 ## 정보 구조
 
@@ -136,14 +172,13 @@ flowchart TD
 |---|---|---|
 | `crawl.py` | 시드 순회, 출처 결정, 캐시 판정, flag 부여, CSV 출력 | 없음 |
 | `discover.py` | 웹 검색으로 후보 URL 수집. **판단하지 않는다** | 탐색 1콜 (도구 ON) |
-| `fetch.py` | robots·간격 준수 수집, 본문·`og:image`·인스타 후보 채집 | 없음 |
+| `fetch.py` | robots·간격 준수 수집, 본문·`og:image`·본문 이미지·인스타 후보 채집 | 없음 |
 | `extract.py` | 구조화 추출, 역방향 검증(`verify`), `call_claude` | 추출 1콜 (도구 OFF) |
-| `enrich.py` | 아티스트 표기 정규화, 마스터 생성 | 후처리 1콜 (도구 OFF) |
+| `enrich.py` | 아티스트 표기 정규화, 장르 분류, 마스터 생성 | 후처리 1콜 (도구 OFF) |
 | `schema.py` | pydantic 스키마 | 없음 |
 
-`claude` CLI 호출은 전부 `extract.call_claude` 하나를 지난다. 나중에 API로 옮길 때 그 함수
-내부만 바꾸면 된다. **웹 검색 도구는 탐색 호출에서만 켜고**, 신뢰할 수 없는 블로그 본문을
-읽는 추출·정규화 호출에서는 모든 도구를 차단한다.
+`claude` CLI 호출은 전부 `extract.call_claude` 하나를 지난다. **나중에 API로 옮길 때 그 함수
+내부만 바꾸면 된다.** 역할 경계는 [파이썬이 하는 일 / LLM이 하는 일](#파이썬이-하는-일--llm이-하는-일) 참고.
 
 ## 설치
 
