@@ -124,6 +124,26 @@ def test_collect_raw_names_dedup_and_skip_secret(tmp_path):
     assert names == ["십센치", "잔나비"]   # 정렬됨, '시크릿'(is_secret) 제외
 
 
+def test_collect_raw_names_skips_non_ok_records(tmp_path):
+    """flag != ok인 레코드는 lineup.csv에 안 실리므로, 아티스트도 같이 제외해 짝을 맞춘다."""
+    _seed_year(tmp_path, 2026, ["십센치"])
+    ydir = tmp_path / "2026"
+    (ydir / "raw" / "고려대학교.json").write_text(json.dumps({
+        "schema_version": crawl.SCHEMA_VERSION,
+        "university": "고려대학교", "campus": "안암캠퍼스", "region": "서울 성북구",
+        "year": 2026, "url": "https://example.com/post2", "flag": "mismatch",
+        "poster_image_url": None,
+        "extraction": {
+            "found": True, "university_name": "고려대학교", "year": 2026,
+            "festival_name": "입실렌티", "start_date": None, "end_date": None,
+            "venue_name": None, "outsider_admission": None, "ticket_info": None,
+            "lineup": [{"artist_raw": "다른가수", "day_label": "1일차", "date": None,
+                        "time": None, "is_secret": False}],
+        },
+    }, ensure_ascii=False), "utf-8")
+    assert enrich.collect_raw_names(tmp_path) == ["십센치"]   # mismatch 레코드의 아티스트는 제외
+
+
 def test_normalize_parses_llm_response(monkeypatch):
     monkeypatch.setattr(enrich, "call_claude", lambda prompt, timeout=120: ENRICH_JSON)
     result = enrich.normalize(["십센치", "잔나비"], [])
@@ -181,6 +201,11 @@ def test_enrich_old_schema_lineup_fails_before_llm(tmp_path, monkeypatch):
                     "day_label": "1일차", "date": "", "time": "",
                     "artist_canonical": "십센치", "artist_raw": "십센치",
                     "is_secret": "false", "source_url": "https://example.com/post"})
+    # 구 스키마 artists.csv도 함께 둔다 — 마이그레이션이 lineup 가드보다 먼저 돌면
+    # 이 LLM 호출(classify_genres)이 가드 전에 발생해 버린다.
+    old_artist_header = ",".join(enrich.OLD_ARTIST_FIELDS) + "\n"
+    (tmp_path / "artists.csv").write_text(
+        old_artist_header + "10CM,10CM,권정열,가수,십센치;십cm,false\n", encoding="utf-8-sig")
 
     def boom(prompt, timeout=120):
         raise AssertionError("스키마 검증 전에 LLM을 호출하면 안 됨")
@@ -205,6 +230,26 @@ def test_enrich_refreshes_lineup_even_when_no_new_names(tmp_path, monkeypatch):
     with open(tmp_path / "2026" / "lineup.csv", newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["artist_canonical"] == "10CM"   # 매핑 값으로 갱신됨 (LLM 없이도)
+
+
+def test_refresh_lineups_skips_secret_rows(tmp_path, monkeypatch):
+    """시크릿 게스트 행(revealed=false)은 매핑에 걸리는 값이 있어도 이름 컬럼을 건드리지 않는다."""
+    _seed_year(tmp_path, 2026, ["십센치"])
+    lineup_path = tmp_path / "2026" / "lineup.csv"
+    with open(lineup_path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    rows.append({"import_key": "연세대학교-2026", "day": 2, "order": 1,
+                "artist_raw": "", "artist_canonical": "", "revealed": "false"})
+    write_csv(lineup_path, LINEUP_FIELDS, rows)
+    # 병리적으로 매핑에 빈 문자열 키가 있어도 시크릿 행은 건드리면 안 된다
+    crawl.save_artist_mapping(tmp_path, {"": "누설됨"})
+    monkeypatch.setattr(enrich, "call_claude", lambda prompt, timeout=120: ENRICH_JSON)
+    enrich.enrich(tmp_path)
+
+    with open(lineup_path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    secret = next(r for r in rows if r["revealed"] == "false")
+    assert secret["artist_raw"] == "" and secret["artist_canonical"] == ""
 
 
 def test_enrich_ignores_mapping_keys_not_sent(tmp_path, monkeypatch):

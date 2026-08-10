@@ -121,6 +121,33 @@ def test_instagram_candidates_keeps_dotted_handles():
     assert fetch.instagram_candidates(html) == ["smu.festival"]
 
 
+def test_fetch_body_wires_image_urls(monkeypatch):
+    """parse_html이 뽑은 이미지가 FetchResult.image_urls로 그대로 전달되는지 확인한다.
+
+    상대 경로 이미지가 절대 URL로 풀리는지(base_url 전달)도 함께 검증한다.
+    """
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+    html = ('<div class="entry-content">' + "본문" * 60
+            + '<img src="https://cdn.example.com/a.jpg">'
+            + '<img data-src="/relative/b.jpg">'
+            + "</div>")
+
+    class Resp:
+        text = html
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp())
+    result = fetch.fetch_body("https://blog.example.com/post")
+    assert result.status == "ok"
+    assert result.image_urls == [
+        "https://cdn.example.com/a.jpg",
+        "https://blog.example.com/relative/b.jpg",
+    ]
+
+
 def test_fetch_text_returns_body(monkeypatch):
     monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
     monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)

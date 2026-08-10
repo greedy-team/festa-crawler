@@ -146,6 +146,15 @@ def test_build_rows():
     assert frow["image_urls"] == "https://cdn.example.com/1.jpg|https://cdn.example.com/2.jpg"
     assert frow["hashtags"] == "연세대축제|아카라카"
     assert frow["instagram_url"] == "https://www.instagram.com/yonsei_festival"
+    assert frow["start_date"] == "2026-05-21"
+    assert frow["end_date"] == "2026-05-23"
+    assert frow["venue_name"] == "노천극장"
+    assert frow["description"] == "연세대학교의 대표 축제."
+    assert frow["external_visitor_policy"] == "CONDITIONAL"
+    assert frow["verification_method"] == "PRE_BOOKING"
+    assert frow["ticket_type"] == "PAID"
+    assert frow["ticket_open_at"] == "2026-05-07T14:00:00"
+    assert frow["poster_url"] == "https://example.com/p.jpg"
     assert set(frow) == set(crawl.FESTIVAL_FIELDS)
 
     lrows = build_lineup_rows(record, {"십센치": "10CM"})
@@ -301,9 +310,9 @@ def test_process_row_passes_candidates_to_extract(tmp_path, monkeypatch):
     assert captured["cands"] == ["hyu_festival"]
 
 
-def test_build_festival_row_includes_instagram_handle():
-    record = {"university": "한양대학교", "campus": "서울캠퍼스",
-              "region": "서울 성동구", "year": 2026,
+def test_build_festival_row_includes_instagram_url():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
               "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
               "poster_image_url": None,
               "extraction": _extraction().model_dump()}
@@ -483,6 +492,23 @@ def test_process_row_keeps_old_ok_cache_on_mismatch(tmp_path, monkeypatch):
     assert after == before                                    # 캐시 파일은 그대로 — 다음 실행에서 재시도
 
 
+def test_process_row_no_fallback_when_seed_url_changed(tmp_path, monkeypatch):
+    """시드 url이 바뀐 경우는 schema_version 폴백 대상이 아니다 — 재수집 실패가 그대로 남아야 한다."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    old = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
+           "region": "서울 서대문구", "year": 2026,
+           "seed_url": "https://old.example.com/post", "url": "https://old.example.com/post",
+           "discovery": "manual", "flag": "ok", "poster_image_url": None,
+           "extraction": _extraction().model_dump()}
+    (raw_dir / "연세대학교.json").write_text(json.dumps(old), "utf-8")
+    monkeypatch.setattr(crawl, "fetch_body",
+                        lambda url: FetchResult(status="fetch_failed", error="404"))
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    record = process_row(_row(), tmp_path)   # _row()의 url은 캐시의 seed_url과 다르다
+    assert record["flag"] == "fetch_failed"   # 폴백 없이 실패 flag 그대로
+
+
 def test_process_row_new_records_carry_schema_version(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
         status="ok", body="본문" * 100, image_urls=["https://cdn.example.com/1.jpg"]))
@@ -517,7 +543,7 @@ def test_lineup_rows_drop_denormalized_columns():
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
     lrow = build_lineup_rows(record, {})[0]
-    for dropped in ("university", "year", "festival_name"):
+    for dropped in ("day_label", "date", "time", "source_url", "is_secret"):
         assert dropped not in lrow
 
 

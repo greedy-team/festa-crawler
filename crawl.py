@@ -109,9 +109,12 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
             cached["campus"] = row.campus
             cached["region"] = row.region
             return cached
-        if cached.get("flag") == "ok":
-            # 구 스키마(또는 시드 변경)의 성공 캐시 — 재수집 실패 시 폴백으로 쓴다.
-            # 재실행은 복원이지 파괴가 아니다 (DEC-0028 원칙).
+        if (cached.get("flag") == "ok"
+                and cached.get("seed_url") == row.url
+                and cached.get("year") == row.year):
+            # 시드는 그대로고 schema_version만 다른 구 스키마 성공 캐시 — 재수집 실패 시
+            # 폴백으로 쓴다. 재실행은 복원이지 파괴가 아니다 (DEC-0028 원칙).
+            # 시드 url·year 자체가 바뀐 경우는 폴백하지 않는다 — 그 변경은 의도적이다.
             stale_ok = cached
 
     record = {

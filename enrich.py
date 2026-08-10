@@ -60,6 +60,8 @@ def collect_raw_names(base_dir: Path) -> list[str]:
     for ydir in year_dirs(base_dir):
         for path in sorted((ydir / "raw").glob("*.json")):
             record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("flag") != "ok":
+                continue    # lineup.csv에 안 실리는 축제 — 아티스트도 같이 제외해 짝을 맞춘다
             ext = record.get("extraction")
             if not ext:
                 continue
@@ -169,12 +171,13 @@ def _refresh_lineups(ydirs: list[Path], mapping: dict[str, str]) -> None:
         with open(lineup_path, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.DictReader(f))
         for row in rows:
+            if row.get("revealed") == "false":
+                continue    # 시크릿 게스트는 두 이름 컬럼 다 빈 값이어야 한다 (명세) — 매핑을 채우면 그 보장이 깨진다
             row["artist_canonical"] = mapping.get(row["artist_raw"], row["artist_raw"])
         write_csv(lineup_path, LINEUP_FIELDS, rows)
 
 
 def enrich(base_dir: Path) -> None:
-    _migrate_artists_csv(base_dir)
     names = collect_raw_names(base_dir)
     if not names:
         print("정규화할 아티스트 없음 — 건너뜀")
@@ -183,7 +186,7 @@ def enrich(base_dir: Path) -> None:
     ydirs = year_dirs(base_dir)
 
     # lineup.csv 스키마를 LLM 호출 전에 검증한다 — normalize()는 578초짜리 LLM 호출이라,
-    # 구 스키마(festival_id 없음)로 뒤늦게 write_csv에서 실패하면 그 호출이 통째로 낭비된다.
+    # 구 스키마(import_key 없음)로 뒤늦게 write_csv에서 실패하면 그 호출이 통째로 낭비된다.
     for ydir in ydirs:
         lineup_path = ydir / "lineup.csv"
         if not lineup_path.exists():
@@ -196,6 +199,7 @@ def enrich(base_dir: Path) -> None:
                 "crawl.py를 먼저 다시 실행해 새 스키마로 재생성하세요."
             )
 
+    _migrate_artists_csv(base_dir)
     mapping = load_artist_mapping(base_dir)
     new_names = [n for n in names if n not in mapping]
 
