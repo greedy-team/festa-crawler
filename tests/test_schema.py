@@ -13,18 +13,31 @@ def test_extraction_result_full_parse():
         "start_date": "2026-05-21",
         "end_date": "2026-05-23",
         "venue_name": "노천극장",
-        "outsider_admission": "외부인 입장 가능",
-        "ticket_info": "유료, 예매 5.07 오픈",
+        "description": "연세대학교의 대표 축제. 3일간 노천극장에서 열린다.",
+        "hashtags": ["연세대축제", "아카라카"],
+        "external_visitor_policy": "CONDITIONAL",
+        "verification_method": "PRE_BOOKING",
+        "ticket_type": "PAID",
+        "ticket_open_at": "2026-05-07T14:00:00",
+        "admission_raw": "재학생 우선 입장이며 외부인은 예매 후 입장 가능합니다.",
         "lineup": [
-            {"artist_raw": "잔나비", "day_label": "1일차", "date": "2026-05-21"},
+            {"artist_raw": "잔나비", "day": 1},
             {"artist_raw": "시크릿", "is_secret": True},
         ],
     }
     result = ExtractionResult.model_validate(data)
-    assert result.lineup[0].artist_raw == "잔나비"
-    assert result.lineup[0].time is None          # 미지정 필드는 None
-    assert result.lineup[0].is_secret is False    # 기본값
+    assert result.lineup[0].day == 1
+    assert result.lineup[1].day is None          # 미지정은 None
     assert result.lineup[1].is_secret is True
+    assert result.external_visitor_policy == "CONDITIONAL"
+
+
+def test_extraction_result_rejects_bad_enum():
+    with pytest.raises(ValidationError):
+        ExtractionResult.model_validate(
+            {"found": True, "university_name": "연세대학교", "year": 2026,
+             "external_visitor_policy": "MAYBE"}
+        )
 
 
 def test_extraction_result_minimal_not_found():
@@ -45,19 +58,20 @@ def test_enrich_result_parse():
     data = {
         "mapping": {"십센치": "10CM", "10cm": "10CM"},
         "artists": [
-            {"name_canonical": "10CM", "name_en": "10CM", "real_name": "권정열",
-             "category": "가수", "aliases": ["십센치"], "needs_review": False}
+            {"name": "10CM", "other_names": ["십센치", "권정열"],
+             "genre": "BAND", "needs_review": False}
         ],
     }
     result = EnrichResult.model_validate(data)
-    assert result.mapping["십센치"] == "10CM"
-    assert result.artists[0].name_canonical == "10CM"
+    assert result.artists[0].name == "10CM"
+    assert result.artists[0].genre == "BAND"
 
 
 def test_artist_master_defaults():
-    a = ArtistMaster.model_validate({"name_canonical": "잔나비"})
+    a = ArtistMaster.model_validate({"name": "잔나비"})
     assert a.needs_review is False
-    assert a.aliases == []
+    assert a.other_names == []
+    assert a.genre is None
 
 
 def test_extraction_result_instagram_handle_optional():

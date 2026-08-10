@@ -9,10 +9,11 @@ from pydantic import ValidationError
 from crawl import (LINEUP_FIELDS, OUTPUT_BASE, load_artist_mapping,
                    save_artist_mapping, write_csv)
 from extract import ExtractError, _extract_json, call_claude
-from schema import ArtistMaster, EnrichResult
+from schema import ArtistMaster, EnrichResult, GenreResult
 
-ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
-                 "aliases", "needs_review"]
+ARTIST_FIELDS = ["name", "other_names", "genre", "image_url", "needs_review"]
+OLD_ARTIST_FIELDS = ["name_canonical", "name_en", "real_name", "category",
+                     "aliases", "needs_review"]
 
 ENRICH_TIMEOUT_SECONDS = 900  # 실측 578초(대량 배치 정규화) + 여유
 
@@ -20,16 +21,21 @@ PROMPT_TEMPLATE = """다음은 대학 축제 라인업에서 추출한 아티스
 당신이 아는 지식으로 각 표기를 정식 활동명으로 정규화하고, 아티스트 마스터 정보를 만드세요.
 
 규칙:
-- 같은 아티스트의 다른 표기는 하나의 name_canonical로 묶습니다 (예: "십센치" → "10CM").
-- 모르는 이름이거나 확실하지 않으면 name_canonical에 원문 표기를 그대로 쓰고
+- 같은 아티스트의 다른 표기는 하나의 name으로 묶습니다 (예: "십센치" → "10CM").
+- 모르는 이름이거나 확실하지 않으면 name에 원문 표기를 그대로 쓰고
   needs_review를 true로 표시하세요. 절대 추측으로 채우지 마세요.
 - mapping에는 입력 목록의 모든 표기가 키로 들어가야 합니다.
 - 설명 없이 JSON 객체 하나만 출력하세요.
+- other_names에는 별칭·영문 표기·본명 등 그 아티스트를 가리키는 다른 표기를
+  모두 넣습니다 (name과 같은 표기는 제외).
+- genre는 HIPHOP / BALLAD_RNB / DANCE / BAND 중 확실한 것만 채우고,
+  모르거나 넷에 안 맞으면 null로 둡니다.
 
 스키마:
 {{"mapping": {{"원문표기": "정식표기"}},
-  "artists": [{{"name_canonical": str, "name_en": str|null, "real_name": str|null,
-               "category": str|null, "aliases": [str], "needs_review": bool}}]}}
+  "artists": [{{"name": str, "other_names": [str],
+               "genre": "HIPHOP"|"BALLAD_RNB"|"DANCE"|"BAND"|null,
+               "needs_review": bool}}]}}
 {known_block}
 아티스트 표기 목록:
 {names}"""
@@ -54,6 +60,8 @@ def collect_raw_names(base_dir: Path) -> list[str]:
     for ydir in year_dirs(base_dir):
         for path in sorted((ydir / "raw").glob("*.json")):
             record = json.loads(path.read_text(encoding="utf-8"))
+            if record.get("flag") != "ok":
+                continue    # lineup.csv에 안 실리는 축제 — 아티스트도 같이 제외해 짝을 맞춘다
             ext = record.get("extraction")
             if not ext:
                 continue
@@ -88,20 +96,70 @@ def _merge_artists(base_dir: Path, artists: list[ArtistMaster]) -> None:
     if path.exists():
         with open(path, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.DictReader(f))
-    known = {r["name_canonical"] for r in rows}
+    known = {r["name"] for r in rows}
     for a in artists:
-        if a.name_canonical in known:
+        if a.name in known:
             continue
         rows.append({
-            "name_canonical": a.name_canonical,
-            "name_en": a.name_en or "",
-            "real_name": a.real_name or "",
-            "category": a.category or "",
-            "aliases": ";".join(a.aliases),
+            "name": a.name,
+            "other_names": "|".join(a.other_names),
+            "genre": a.genre or "",
+            "image_url": "",
             "needs_review": "true" if a.needs_review else "false",
         })
-        known.add(a.name_canonical)
+        known.add(a.name)
     write_csv(path, ARTIST_FIELDS, rows)
+
+
+GENRE_PROMPT = """다음 아티스트들의 장르를 분류하세요.
+
+규칙:
+- HIPHOP / BALLAD_RNB / DANCE / BAND 중 확실한 것만 채우고, 모르거나 넷에 안 맞으면 null.
+- 절대 추측으로 채우지 마세요.
+- 설명 없이 JSON 객체 하나만 출력하세요: {{"genres": {{"아티스트명": "HIPHOP"|null}}}}
+
+아티스트 목록:
+{names}"""
+
+
+def classify_genres(names: list[str]) -> dict[str, str | None]:
+    """아티스트 name 목록의 장르를 LLM 1콜로 분류한다. 실패하면 예외가 전파돼 중단된다."""
+    if not names:
+        return {}
+    raw = call_claude(GENRE_PROMPT.format(names="\n".join(f"- {n}" for n in names)),
+                      timeout=ENRICH_TIMEOUT_SECONDS)
+    return GenreResult.model_validate_json(_extract_json(raw)).genres
+
+
+def _migrate_artists_csv(base_dir: Path) -> None:
+    """구 스키마 artists.csv를 새 컬럼으로 1회 변환한다 (genre는 LLM 1콜로 분류).
+
+    변환 실패 시 파일은 건드리지 않으므로 다음 실행에서 다시 시도된다.
+    """
+    path = base_dir / "artists.csv"
+    if not path.exists():
+        return
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        if reader.fieldnames != OLD_ARTIST_FIELDS:
+            return
+        old_rows = list(reader)
+    genres = classify_genres([r["name_canonical"] for r in old_rows])
+    rows = []
+    for r in old_rows:
+        name = r["name_canonical"]
+        others = [x for x in [r["name_en"], r["real_name"]] + r["aliases"].split(";")
+                  if x and x != name]
+        rows.append({
+            "name": name,
+            "other_names": "|".join(dict.fromkeys(others)),   # 순서 유지 중복 제거
+            "genre": genres.get(name) or "",
+            "image_url": "",
+            "needs_review": r["needs_review"],
+        })    # 구 category는 버린다 — 장르로 일원화
+    write_csv(path, ARTIST_FIELDS, rows)
+    print(f"artists.csv 마이그레이션 완료: {len(rows)}명, "
+          f"genre 분류 {sum(1 for r in rows if r['genre'])}건")
 
 
 def _refresh_lineups(ydirs: list[Path], mapping: dict[str, str]) -> None:
@@ -113,6 +171,8 @@ def _refresh_lineups(ydirs: list[Path], mapping: dict[str, str]) -> None:
         with open(lineup_path, newline="", encoding="utf-8-sig") as f:
             rows = list(csv.DictReader(f))
         for row in rows:
+            if row.get("revealed") == "false":
+                continue    # 시크릿 게스트는 두 이름 컬럼 다 빈 값이어야 한다 (명세) — 매핑을 채우면 그 보장이 깨진다
             row["artist_canonical"] = mapping.get(row["artist_raw"], row["artist_raw"])
         write_csv(lineup_path, LINEUP_FIELDS, rows)
 
@@ -126,7 +186,7 @@ def enrich(base_dir: Path) -> None:
     ydirs = year_dirs(base_dir)
 
     # lineup.csv 스키마를 LLM 호출 전에 검증한다 — normalize()는 578초짜리 LLM 호출이라,
-    # 구 스키마(festival_id 없음)로 뒤늦게 write_csv에서 실패하면 그 호출이 통째로 낭비된다.
+    # 구 스키마(import_key 없음)로 뒤늦게 write_csv에서 실패하면 그 호출이 통째로 낭비된다.
     for ydir in ydirs:
         lineup_path = ydir / "lineup.csv"
         if not lineup_path.exists():
@@ -135,10 +195,11 @@ def enrich(base_dir: Path) -> None:
             header = csv.DictReader(f).fieldnames
         if header != LINEUP_FIELDS:
             raise SystemExit(
-                f"{lineup_path} 가 예전 스키마입니다 (festival_id 없음) — "
+                f"{lineup_path} 가 예전 스키마입니다 (import_key 없음) — "
                 "crawl.py를 먼저 다시 실행해 새 스키마로 재생성하세요."
             )
 
+    _migrate_artists_csv(base_dir)
     mapping = load_artist_mapping(base_dir)
     new_names = [n for n in names if n not in mapping]
 

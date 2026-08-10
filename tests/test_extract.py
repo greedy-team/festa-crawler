@@ -7,10 +7,10 @@ from schema import ExtractionResult
 VALID_JSON = """{
   "found": true, "university_name": "연세대학교", "year": 2026,
   "festival_name": "아카라카", "start_date": "2026-05-21", "end_date": "2026-05-23",
-  "venue_name": "노천극장", "outsider_admission": "사전 예매 시 가능",
-  "ticket_info": "유료",
-  "lineup": [{"artist_raw": "잔나비", "day_label": "1일차",
-              "date": "2026-05-21", "time": null, "is_secret": false}]
+  "venue_name": "노천극장", "description": "축제 소개.", "hashtags": ["아카라카"],
+  "external_visitor_policy": "CONDITIONAL",
+  "admission_raw": "외부인은 예매 후 입장 가능합니다.",
+  "lineup": [{"artist_raw": "잔나비", "day": 1, "is_secret": false}]
 }"""
 
 
@@ -90,6 +90,27 @@ def test_extract_without_candidates_prompts_none(monkeypatch):
     monkeypatch.setattr(extract, "call_claude", fake)
     extract.extract("본문", "연세대학교", 2026)
     assert "후보 없음" in captured["prompt"]
+
+
+def test_prompt_includes_new_field_rules(monkeypatch):
+    seen = {}
+
+    def fake_call(prompt, timeout=120, tools=""):
+        seen["prompt"] = prompt
+        return ('{"found": true, "university_name": "연세대학교", "year": 2026,'
+                ' "description": "축제 소개.", "hashtags": ["아카라카"],'
+                ' "external_visitor_policy": "CONDITIONAL",'
+                ' "admission_raw": "외부인은 예매 후 입장 가능합니다.",'
+                ' "lineup": [{"artist_raw": "잔나비", "day": 1}]}')
+
+    monkeypatch.setattr(extract, "call_claude", fake_call)
+    result = extract.extract("본문", "연세대학교", 2026)
+    assert result.description == "축제 소개."
+    assert result.lineup[0].day == 1
+    for token in ["description", "hashtags", "external_visitor_policy",
+                  "verification_method", "ticket_type", "ticket_open_at",
+                  "admission_raw", "day", "주최명"]:
+        assert token in seen["prompt"]
 
 
 def test_call_claude_passes_tools_flag(monkeypatch):

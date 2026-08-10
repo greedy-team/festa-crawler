@@ -77,9 +77,9 @@ async function load(retry = true) {
 }
 
 function visible() {
-  if (filter === "search") return data.festivals.filter((r) => r.discovery === "sitemap" || r.discovery === "search");
+  if (filter === "search") return data.festivals.filter((r) => r.discovery === "SITEMAP" || r.discovery === "SEARCH");
   if (filter === "all") return data.festivals;
-  return data.festivals.filter((r) => r.flag !== "ok");
+  return data.festivals.filter((r) => r.flag !== "OK");
 }
 
 function render() {
@@ -87,38 +87,42 @@ function render() {
   const rows = visible();
   if (selected >= rows.length) selected = Math.max(0, rows.length - 1);
   $("list").innerHTML = rows.map((r, i) => `
-    <li class="${i === selected ? "sel" : ""} ${r.flag === "ok" ? "" : "bad"}" data-i="${i}">
-      <span class="flag">${esc(r.flag)}</span>${esc(r.university)}
+    <li class="${i === selected ? "sel" : ""} ${r.flag === "OK" ? "" : "bad"}" data-i="${i}">
+      <span class="flag">${esc(r.flag)}</span>${esc(r.host_name)}
     </li>`).join("");
   renderDetail(rows[selected]);
 }
 
 function renderDetail(f) {
   if (!f) { $("detail").innerHTML = "<p>표시할 축제가 없습니다.</p>"; return; }
-  // festival_id가 없는 행(구 스키마 잔존)까지 undefined === undefined로 걸리지 않도록 truthy를 먼저 본다.
-  const lineup = data.lineup.filter((l) => l.festival_id && l.festival_id === f.festival_id);
+  // import_key가 없는 행(구 스키마 잔존)까지 undefined === undefined로 걸리지 않도록 truthy를 먼저 본다.
+  const lineup = data.lineup.filter((l) => l.import_key && l.import_key === f.import_key);
   const url = safeUrl(f.source_url);
+  const tags = (f.hashtags || "").split("|").filter(Boolean).map((h) => "#" + h).join(" ");
   const fields = [
-    ["축제명", f.festival_name], ["기간", `${f.start_date} ~ ${f.end_date}`],
-    ["장소", f.venue_name], ["외부인", f.outsider_admission],
-    ["티켓", f.ticket_info], ["인스타", f.instagram_handle],
-    ["포스터", f.poster_image_url], ["출처", f.discovery], ["flag", f.flag],
+    ["축제명", f.name], ["기간", `${f.start_date} ~ ${f.end_date}`],
+    ["장소", f.venue_name], ["소개", f.description], ["해시태그", tags],
+    ["외부인", f.external_visitor_policy], ["확인 방식", f.verification_method],
+    ["티켓", f.ticket_type], ["예매 오픈", f.ticket_open_at],
+    ["판단 근거", f.admission_raw], ["인스타", f.instagram_url],
+    ["포스터", f.poster_url], ["이미지", f.image_urls],
+    ["출처", f.discovery], ["flag", f.flag],
   ];
   $("detail").innerHTML = `
-    <h2>${esc(f.festival_id)}</h2>
+    <h2>${esc(f.import_key)}</h2>
     <p>
-      <button class="rerun" data-uni="${esc(f.university)}" data-rediscover="0">다시 돌리기</button>
-      <button class="rerun" data-uni="${esc(f.university)}" data-rediscover="1">탐색부터</button>
+      <button class="rerun" data-uni="${esc(f.host_name)}" data-rediscover="0">다시 돌리기</button>
+      <button class="rerun" data-uni="${esc(f.host_name)}" data-rediscover="1">탐색부터</button>
     </p>
     <table>${fields.map(([k, v]) =>
       `<tr><th>${esc(k)}</th><td>${esc(v) || "—"}</td></tr>`).join("")}</table>
     <h3>라인업 ${lineup.length}건</h3>
     <table>${lineup.map((l) => `
-      <tr><th>${esc(l.day_label)} ${esc(l.time)}</th>
+      <tr><th>${l.day ? esc(l.day) + "일차" : "?"} · ${esc(l.order)}번</th>
           <td>${esc(l.artist_canonical)}
               ${l.artist_canonical !== l.artist_raw
                 ? `<span class="raw">← ${esc(l.artist_raw)}</span>` : ""}
-              ${l.is_secret === "true" ? "🔒" : ""}</td></tr>`).join("")}</table>
+              ${l.revealed === "false" ? "🔒" : ""}</td></tr>`).join("")}</table>
     <h3>원본 ${url
       ? `<a href="${esc(url)}" target="_blank" rel="noreferrer">새 탭 ↗</a>` : ""}</h3>
     ${url
@@ -133,17 +137,16 @@ function renderArtists() {
   $("list").innerHTML = "";
   $("detail").innerHTML = `
     <h2>아티스트 ${rows.length}</h2>
-    <table><tr><th>정식 표기</th><td>영문 / 본명 / 분류 / 다른 표기</td></tr>
+    <table><tr><th>대표명</th><td>장르 / 다른 표기</td></tr>
     ${rows.map((a) => `
-      <tr><th>${a.needs_review === "true" ? "⚠️ " : ""}${esc(a.name_canonical)}</th>
-          <td>${esc(a.name_en)} / ${esc(a.real_name)} / ${esc(a.category)}
-              / ${esc(a.aliases)}</td></tr>`).join("")}</table>`;
+      <tr><th>${a.needs_review === "true" ? "⚠️ " : ""}${esc(a.name)}</th>
+          <td>${esc(a.genre)} / ${esc(a.other_names)}</td></tr>`).join("")}</table>`;
 }
 
-async function run(job, university, rediscover) {
+async function run(job, hostName, rediscover) {
   const res = await fetch("/api/run", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ job, university, rediscover }),
+    body: JSON.stringify({ job, university: hostName, rediscover }),
   });
   const body = await res.json();
   if (!res.ok) { alert(body.error); return; }

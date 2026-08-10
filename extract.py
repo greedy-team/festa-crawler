@@ -17,9 +17,22 @@ PROMPT_TEMPLATE = """다음은 '{university}'의 {year}년 축제 관련 블로�
 규칙:
 - 본문에 명시되지 않은 값은 반드시 null로 둡니다. 절대 추측하거나 지어내지 마세요.
 - found: 이 글이 실제로 '{university}'의 {year}년 축제 라인업/정보 글이면 true, 아니면 false.
+- festival_name: 축제 이름만 씁니다. 대학명(주최명)은 포함하지 않습니다 (예: "아카라카").
+- description: 본문에 있는 사실만으로 축제 소개를 2~3문장으로 씁니다. 본문에 없는
+  정보나 수식·과장은 넣지 않습니다. 쓸 정보가 부족하면 null.
+- hashtags: 본문에 실제로 적힌 해시태그만 '#' 없이 나열합니다. 없으면 빈 배열.
+- external_visitor_policy: 외부인 입장에 대한 본문 근거가 있을 때만
+  ALLOWED(입장 가능) / CONDITIONAL(조건부 입장) / DENIED(입장 불가) 중 하나. 근거 없으면 null.
+- verification_method: 입장 확인 방식의 근거가 있을 때만
+  NONE / STUDENT_ID(학생증) / PRE_BOOKING(사전 예매) / INVITATION(초청) / OTHER 중 하나. 근거 없으면 null.
+- ticket_type: 유료 근거가 있으면 PAID, 무료 명시가 있으면 FREE. 근거 없으면 null.
+- ticket_open_at: 예매 오픈 일시가 명시된 경우만 YYYY-MM-DDTHH:mm:ss 형식. 아니면 null.
+- admission_raw: 위 입장·티켓 판단의 근거가 된 본문 문장을 그대로 인용합니다
+  (요약·수정 금지). 근거 없으면 null.
 - artist_raw: 본문에 적힌 표기 그대로 씁니다 (정규화 금지).
+- day: 그 출연자가 서는 일차를 1부터 시작하는 정수로 씁니다. 본문의 일차 표기나
+  날짜와 축제 시작일로 판단하고, 판단할 수 없으면 null.
 - is_secret: '시크릿', '당일 공개' 등으로 표기된 미공개 출연자면 true.
-- date는 YYYY-MM-DD로 정규화 가능할 때만 채웁니다.
 - instagram_handle: 아래 후보와 본문을 종합해 '{university}'의 축제·총학생회 공식 계정이
   확실한 것만 채웁니다. 블로그 운영자·언론사·무관 계정이면 null. 후보에 없는 계정을 지어내지 마세요.
 - 설명이나 마크다운 없이 JSON 객체 하나만 출력하세요.
@@ -27,10 +40,12 @@ PROMPT_TEMPLATE = """다음은 '{university}'의 {year}년 축제 관련 블로�
 스키마:
 {{"found": bool, "university_name": str, "year": int,
   "festival_name": str|null, "start_date": str|null, "end_date": str|null,
-  "venue_name": str|null, "outsider_admission": str|null, "ticket_info": str|null,
-  "instagram_handle": str|null,
-  "lineup": [{{"artist_raw": str, "day_label": str|null, "date": str|null,
-              "time": str|null, "is_secret": bool}}]}}
+  "venue_name": str|null, "description": str|null, "hashtags": [str],
+  "external_visitor_policy": "ALLOWED"|"CONDITIONAL"|"DENIED"|null,
+  "verification_method": "NONE"|"STUDENT_ID"|"PRE_BOOKING"|"INVITATION"|"OTHER"|null,
+  "ticket_type": "FREE"|"PAID"|null, "ticket_open_at": str|null,
+  "admission_raw": str|null, "instagram_handle": str|null,
+  "lineup": [{{"artist_raw": str, "day": int|null, "is_secret": bool}}]}}
 
 본문 링크에서 발견된 인스타그램 계정 후보:
 {candidates}

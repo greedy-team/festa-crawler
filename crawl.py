@@ -37,27 +37,33 @@ def load_universities(path: Path) -> list[UniversityRow]:
     return rows
 
 
+SCHEMA_VERSION = 2
+
 FESTIVAL_FIELDS = [
-    "festival_id", "university", "campus", "region", "year", "festival_name",
-    "start_date", "end_date", "venue_name", "outsider_admission",
-    "ticket_info", "instagram_handle", "poster_image_url", "source_url",
-    "discovery", "flag",
+    "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
+    "poster_url", "image_urls", "description", "hashtags",
+    "external_visitor_policy", "verification_method", "ticket_type",
+    "ticket_open_at", "admission_raw", "source_url", "discovery", "flag",
+    "instagram_url",
 ]
-LINEUP_FIELDS = [
-    "festival_id", "day_label", "date", "time",
-    "artist_canonical", "artist_raw", "is_secret", "source_url",
-]
+LINEUP_FIELDS = ["import_key", "day", "order", "artist_raw", "artist_canonical", "revealed"]
+
+ADMISSION_RAW_MAX_CHARS = 200
 
 
-def festival_id(university: str, year: int) -> str:
-    """축제 1건의 안정적인 식별자. 시드에서 university+year 조합이 유일함을 전제한다."""
+def import_key(university: str, year: int) -> str:
+    """축제 1건의 안정적인 식별자(주최명-연도). 백엔드 명세의 import_key.
+
+    시드에서 university+year 조합이 유일함을 전제한다.
+    """
     return f"{university}-{year}"
 
 
 def _attempt_url(url: str, row: UniversityRow) -> dict:
     """URL 1건을 수집·추출·검증한다. flag/poster_image_url/extraction만 담아 돌려준다."""
     fr = fetch_body(url)
-    attempt = {"flag": fr.status, "poster_image_url": fr.poster_image_url, "extraction": None}
+    attempt = {"flag": fr.status, "poster_image_url": fr.poster_image_url,
+               "image_urls": fr.image_urls, "extraction": None}
     if fr.status != "ok":
         return attempt
     try:
@@ -93,20 +99,31 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
     raw_dir = out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     cache_path = raw_dir / f"{row.university}.json"
+    stale_ok = None
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached.get("seed_url") == row.url and cached.get("year") == row.year:
+        if (cached.get("schema_version") == SCHEMA_VERSION
+                and cached.get("seed_url") == row.url
+                and cached.get("year") == row.year):
             # 시드 전용 필드는 현재 행 기준으로 갱신 (추출 결과에는 영향 없음)
             cached["campus"] = row.campus
             cached["region"] = row.region
             return cached
-        # 시드 URL 또는 연도가 바뀌었으면 캐시 무시하고 다시 처리 (아래에서 덮어씀)
+        if (cached.get("flag") == "ok"
+                and cached.get("seed_url") == row.url
+                and cached.get("year") == row.year):
+            # 시드는 그대로고 schema_version만 다른 구 스키마 성공 캐시 — 재수집 실패 시
+            # 폴백으로 쓴다. 재실행은 복원이지 파괴가 아니다 (DEC-0028 원칙).
+            # 시드 url·year 자체가 바뀐 경우는 폴백하지 않는다 — 그 변경은 의도적이다.
+            stale_ok = cached
 
     record = {
+        "schema_version": SCHEMA_VERSION,
         "university": row.university, "campus": row.campus,
         "region": row.region, "year": row.year,
         "seed_url": row.url, "url": row.url, "discovery": "",
-        "flag": "no_source", "poster_image_url": None, "extraction": None,
+        "flag": "no_source", "poster_image_url": None, "image_urls": [],
+        "extraction": None,
     }
 
     if row.url is not None:
@@ -121,58 +138,80 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
             candidates = discover_cached(row.university, row.year, out_dir)
             if candidates is None:
                 # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
-                return record
+                return _keep_stale_on_failure(record, stale_ok, row)
             if not _try_candidates(candidates, row, record, "search"):
                 # 어느 후보도 verify를 통과하지 못함
                 if row.url is None:
                     record["flag"] = "no_candidate"
 
+    result = _keep_stale_on_failure(record, stale_ok, row)
+    if result is stale_ok:
+        return result       # 구 캐시 파일은 그대로 둔다 — 다음 실행에서 다시 시도
     if record["flag"] not in ("fetch_failed", "extract_failed"):
         cache_path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     return record
 
 
+def _keep_stale_on_failure(record: dict, stale_ok: dict | None, row: UniversityRow) -> dict:
+    """재수집이 실패했고 구 성공 캐시가 있으면 구 데이터를 지키는 쪽을 택한다."""
+    if record["flag"] == "ok" or stale_ok is None:
+        return record
+    stale_ok["campus"] = row.campus
+    stale_ok["region"] = row.region
+    print("  -> 재수집 실패, 이전 결과 유지", flush=True)
+    return stale_ok
+
+
 def build_festival_row(record: dict) -> dict:
     ext = record["extraction"] or {}
+    handle = ext.get("instagram_handle") or ""
     return {
-        "festival_id": festival_id(record["university"], record["year"]),
-        "university": record["university"], "campus": record["campus"],
-        "region": record["region"], "year": record["year"],
-        "festival_name": ext.get("festival_name") or "",
+        "import_key": import_key(record["university"], record["year"]),
+        "host_name": record["university"],
+        "name": ext.get("festival_name") or "",
         "start_date": ext.get("start_date") or "",
         "end_date": ext.get("end_date") or "",
         "venue_name": ext.get("venue_name") or "",
-        "outsider_admission": ext.get("outsider_admission") or "",
-        "ticket_info": ext.get("ticket_info") or "",
-        "instagram_handle": ext.get("instagram_handle") or "",
-        "poster_image_url": record["poster_image_url"] or "",
+        "poster_url": record["poster_image_url"] or "",
+        "image_urls": "|".join(record.get("image_urls") or []),
+        "description": ext.get("description") or "",
+        "hashtags": "|".join(ext.get("hashtags") or []),
+        "external_visitor_policy": ext.get("external_visitor_policy") or "",
+        "verification_method": ext.get("verification_method") or "",
+        "ticket_type": ext.get("ticket_type") or "",
+        "ticket_open_at": ext.get("ticket_open_at") or "",
+        "admission_raw": (ext.get("admission_raw") or "")[:ADMISSION_RAW_MAX_CHARS],
         "source_url": record["url"] or "",
-        "discovery": record.get("discovery", ""),
-        "flag": record["flag"],
+        "discovery": (record.get("discovery") or "").upper(),
+        "flag": record["flag"].upper(),
+        "instagram_url": f"https://www.instagram.com/{handle}" if handle else "",
     }
 
 
 def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
     """라인업 행을 만든다. artist_canonical은 매핑에서 채운다 — 매핑에 없으면 원문 그대로.
 
-    매핑을 여기서 적용하기 때문에 crawl을 몇 번 다시 돌려도 정규화가 복원된다.
+    flag가 ok인 축제만 출력한다 — 그 외 행은 백엔드에서 고아 INVALID만 만든다.
+    시크릿 게스트는 revealed=false + 이름 빈 값 (명세 검증 규칙).
     """
     ext = record["extraction"]
-    if not ext:
+    if not ext or record["flag"] != "ok":
         return []
-    fid = festival_id(record["university"], record["year"])
+    key = import_key(record["university"], record["year"])
+    order_by_day: dict = {}
     rows = []
     for item in ext["lineup"]:
-        raw = item["artist_raw"]
+        day = item.get("day")
+        order_by_day[day] = order_by_day.get(day, 0) + 1
+        secret = bool(item.get("is_secret"))
+        raw = "" if secret else item["artist_raw"]
         rows.append({
-            "festival_id": fid,
-            "day_label": item.get("day_label") or "",
-            "date": item.get("date") or "",
-            "time": item.get("time") or "",
-            "artist_canonical": mapping.get(raw, raw),
+            "import_key": key,
+            "day": "" if day is None else day,
+            "order": order_by_day[day],
             "artist_raw": raw,
-            "is_secret": "true" if item.get("is_secret") else "false",
-            "source_url": record["url"] or "",
+            "artist_canonical": "" if secret else mapping.get(raw, raw),
+            "revealed": "false" if secret else "true",
         })
     return rows
 
