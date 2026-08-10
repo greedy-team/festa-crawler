@@ -9,7 +9,7 @@ from crawl import (UniversityRow, build_festival_row, build_lineup_rows,
                    process_row, write_csv)
 from extract import ExtractError
 from fetch import FetchResult
-from schema import ExtractionResult
+from schema import ExtractionResult, LineupItem
 
 
 def _row(**overrides) -> UniversityRow:
@@ -186,8 +186,8 @@ def test_admission_raw_truncated_to_200_chars():
 
 def test_build_lineup_rows_day_none_gets_own_order():
     ext = _extraction().model_copy(update={"lineup": [
-        {"artist_raw": "잔나비", "day": None},
-        {"artist_raw": "십센치", "day": None},
+        LineupItem(artist_raw="잔나비", day=None),
+        LineupItem(artist_raw="십센치", day=None),
     ]})
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
