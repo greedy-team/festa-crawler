@@ -3,6 +3,7 @@ output/
 __pycache__/
 .pytest_cache/
 .superpowers/
+.playwright-mcp/
 
 # ====================================================================
 # projectops: Auto-added entries
@@ -16,3 +17,4 @@ pr_body.md
 
 # Superpowers 산출물 (스펙·계획 문서)
 docs/superpowers/
+docs/specs/
