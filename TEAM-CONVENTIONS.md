@@ -1,9 +1,9 @@
 # festa 협업 규칙
 
-프론트·백엔드 **공통 규칙**이 앞이고, 레포별로 다른 건 마지막 섹션에만 있습니다.
+세 레포 **공통 규칙**이 앞이고, 레포별로 다른 건 마지막 섹션에만 있습니다.
 
-> 이 문서는 `festa-frontend`와 `festa-backend` 두 레포에 **같은 내용으로 존재**합니다.
-> 한쪽만 고치면 어긋나므로, 수정할 때 반드시 양쪽을 함께 고치세요.
+> 이 문서는 `festa-frontend`·`festa-backend`·`festa-crawler` **세 레포에 같은 내용으로
+> 존재**합니다. 한 곳만 고치면 어긋나므로, 수정할 때 반드시 세 곳을 함께 고치세요.
 
 이슈 → 브랜치 → 커밋 → PR → 릴리스가 자동으로 이어집니다. **이슈부터 만드세요.**
 
@@ -11,6 +11,7 @@
 | --- | --- | --- |
 | `festa-frontend` | Next.js 16 · pnpm | Vercel (자동) |
 | `festa-backend` | Spring Boot 4.1 · Java 21 · Gradle | 미설정 (백엔드팀 구성 예정) |
+| `festa-crawler` | Python 3.13 · venv | 없음 (로컬 배치 크롤러) |
 
 ---
 
@@ -164,18 +165,18 @@ docs/pr/        PR 본문 초안
 
 ## CI/CD
 
-| 언제 | `festa-frontend` | `festa-backend` |
-| --- | --- | --- |
-| PR → `main`/`develop` | 빌드 검증 (`pnpm build`) | — *(백엔드팀 구성 예정)* |
-| push `develop` | Vercel **Preview** 배포 | — |
-| push `main` | Vercel **Production** 배포 | — |
-| push `main` | 버전 태그 + README 갱신 | 버전 태그 + README 갱신 |
-| `develop` → `main` PR | CHANGELOG + 자동 머지 | CHANGELOG + 자동 머지 |
-| 이슈 생성 / 제목·라벨 변경 | 브랜치명 댓글 | 브랜치명 댓글 |
-| PR → `develop` 머지 | 이슈 자동 종료 | 이슈 자동 종료 |
-| 에이전트 커맨드 | Claude · Codex 7종 | *(이식 예정)* |
+| 언제 | `festa-frontend` | `festa-backend` | `festa-crawler` |
+| --- | --- | --- | --- |
+| PR → `main`/`develop` | 빌드 검증 (`pnpm build`) | — *(백엔드팀 구성 예정)* | — *(필요해지면 추가)* |
+| push `develop` | Vercel **Preview** 배포 | — | — |
+| push `main` | Vercel **Production** 배포 | — | — |
+| push `main` | 버전 태그 + README 갱신 | 버전 태그 + README 갱신 | 버전 태그 + README 갱신 |
+| `develop` → `main` PR | CHANGELOG + 자동 머지 | CHANGELOG + 자동 머지 | CHANGELOG + 자동 머지 |
+| 이슈 생성 / 제목·라벨 변경 | 브랜치명 댓글 | 브랜치명 댓글 | 브랜치명 댓글 |
+| PR → `develop` 머지 | 이슈 자동 종료 | 이슈 자동 종료 | 이슈 자동 종료 |
+| 에이전트 커맨드 | Claude · Codex 7종 | Claude · Codex 7종 | Claude · Codex 7종 |
 
-이슈·브랜치·커밋·릴리스는 **양쪽이 완전히 동일**합니다. 다른 건 배포와 커맨드뿐입니다.
+이슈·브랜치·커밋·릴리스·커맨드는 **세 레포가 완전히 동일**합니다. 다른 건 배포와 스택뿐입니다.
 
 ## festa-frontend
 
@@ -201,7 +202,23 @@ pnpm dev
 - Java 21 / Gradle 9.6 (Kotlin DSL)
 - **배포는 아직 없습니다.** 백엔드팀이 구성하며, `main` push에 워크플로우를 붙이면 프론트와 같은 흐름이 됩니다
 - `version.yml`의 `options.deploy`는 `none`입니다. `docker-ssh`로 되돌리면 `npx projectops` 업데이트 때 Docker 워크플로우가 재설치되니 주의하세요
-- 에이전트 커맨드는 아직 이식 전입니다. `/commit`의 포맷 단계는 백엔드 포맷터(spotless 등)가 정해진 뒤에 채웁니다
+- `/commit`의 포맷 단계는 비어 있습니다. 포맷터(spotless 등)가 정해진 뒤에 채웁니다
+
+## festa-crawler
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python crawl.py --year 2026    # 수집·추출 → output/<연도>/
+.venv/bin/python -m pytest
+```
+
+- Python 3.13 / venv + `requirements.txt` (pyproject.toml 없음)
+- **배포가 없습니다.** 서버가 아니라 손으로 돌리는 로컬 배치 크롤러입니다
+- **테스트 CI도 아직 없습니다.** 필요해지면 `on: pull_request` 워크플로우를 추가합니다
+- **수집 결과(`output/`)는 커밋하지 않습니다.** 재생성 가능하고 매 실행마다 바뀝니다
+- `version.yml`의 `options.deploy`는 `none`입니다. 되돌리면 `npx projectops` 업데이트 때 배포 워크플로우가 설치됩니다
+- `/commit`의 포맷 단계는 비어 있습니다. 포맷터(ruff 등) 도입 후 채웁니다
+- 커맨드 산출물 외에 설계·계획 문서를 `docs/plans/` `docs/specs/`에 함께 둡니다
 
 ---
 
