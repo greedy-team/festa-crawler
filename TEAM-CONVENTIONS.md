@@ -110,6 +110,14 @@ fix : 세션 만료 시 401 반환하도록 수정 #31
 
 타입: `feat` `fix` `refactor` `chore` `docs`
 
+**AI 태그를 넣지 않습니다.** `Co-Authored-By: Claude`, `Generated with Claude Code`,
+`Co-Authored-By: GPT` 같은 트레일러·서명은 전부 금지입니다. 에이전트로 작업했더라도
+커밋 작성자는 사람만 남깁니다.
+
+Claude Code는 `~/.claude/settings.json`에 `"includeCoAuthoredBy": false`를 넣으면
+자동 트레일러가 꺼집니다. **이 설정은 머신 로컬이라 레포를 따라오지 않습니다** —
+팀원 각자가 자기 환경에 걸어야 하고, 그래서 규칙을 여기 적어둡니다.
+
 ## 5. PR
 
 ### 일반 PR (작업 브랜치 → `develop`)

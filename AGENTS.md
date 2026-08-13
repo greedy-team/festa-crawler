@@ -51,7 +51,7 @@ Codex는 `AGENTS.md`와 `.agents/skills/`만 자동으로 읽습니다. `.claude
   `npx projectops` 업데이트 때 배포 워크플로우가 설치됩니다
 - **수집 결과(`output/`)는 커밋하지 않습니다.** 크롤링 산출물이라 재생성 가능하고, 매 실행마다 바뀝니다
 - **robots.txt와 요청 간격을 우회하지 않습니다.** 남의 서버를 긁는 코드입니다
-- **커밋 메시지에 `Co-Authored-By` 금지**
+- **커밋 메시지에 AI 태그 금지.** `Co-Authored-By: Claude`·`Generated with …`·GPT 서명 등 전부 — 규칙 원본은 [`TEAM-CONVENTIONS.md`](./TEAM-CONVENTIONS.md) §4
 - **커밋·푸시는 사용자가 요청할 때만.** 알아서 하지 않습니다
 
 ## 기술 스택
