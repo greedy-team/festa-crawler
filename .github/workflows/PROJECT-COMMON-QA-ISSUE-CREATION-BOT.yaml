@@ -155,40 +155,37 @@ jobs:
             console.log('🎯 QA 이슈 제목:', qaTitle);
             
             // QA 이슈 본문 생성
-            const qaBody = `🔗 ISSUE 정보
-            ---
+            const qaBody = `## 🔗 ISSUE 정보
+
             - #${originalIssueNumber}
             ${isPullRequest ? `- PR: #${issueOrPrNumber}` : ''}
 
-            🔗 PR 정보
-            ---
+            ## 🔗 PR 정보
+
             ${isPullRequest ? `- #${issueOrPrNumber}` : '<!-- PR 번호나 URL을 작성해주세요 -->'}
 
-            🧩 시험 대상
-            ---
+            ## 🧩 시험 대상
 
             ${title.replace(/^\[.*?\]\s*/, '')}에 대한 기능 시험
 
-            📋 테스트 시나리오
-            ---
+            ## 📋 테스트 시나리오
 
             1. 기본 기능 동작 확인
             2. 엣지 케이스 테스트
             3. UI/UX 확인
             4. 에러 처리 확인
 
-            ⚙️ 테스트 환경
-            ---
+            ## ⚙️ 테스트 환경
+
             - **프로젝트 Version**: 
             - **OS**: 
             - **브라우저**: 
             - **기기**: 
 
-            🙋‍♂️ 담당자
-            ---
+            ## 👤 담당자
 
-            - **시험담당**: 이름
-            - **요청자**: @${issue.user.login}
+            - 시험담당: 이름
+            - 요청자: @${issue.user.login}
 
             ---
             *🤖 이 이슈는 @projectops 봇에 의해 자동 생성되었습니다.*`;
