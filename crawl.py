@@ -18,20 +18,49 @@ class UniversityRow:
     region: str
     year: int
     url: str | None
+    latitude: str
+    longitude: str
 
 
 def load_universities(path: Path) -> list[UniversityRow]:
     rows: list[UniversityRow] = []
+    seen: set[str] = set()
     with open(path, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        missing = [c for c in ("latitude", "longitude")
+                   if c not in (reader.fieldnames or [])]
+        if missing:
+            # 좌표 없이 그냥 나가면 백엔드가 전 행을 발행 불가로 받는다 — 오류가 아니라
+            # "아무것도 화면에 안 뜬다"로 나타나서 원인을 찾기 어렵다.
+            raise SystemExit(
+                f"{path} 에 {', '.join(missing)} 컬럼이 없습니다 — 좌표 도입 전 시드입니다.\n"
+                "헤더를 university,campus,region,year,url,latitude,longitude 로 바꾸고\n"
+                "캠퍼스 정문 또는 축제 주무대 기준 좌표를 채운 뒤 다시 실행하세요."
+            )
+        for r in reader:
+            university = r["university"].strip()
+            if university in seen:
+                # 캐시가 대학 이름으로만 갈린다 (raw/{university}.json,
+                # discovered/{university}.json). 두 캠퍼스가 탐색 후보 캐시를 공유하고
+                # verify()는 캠퍼스를 구분하지 못해 같은 축제가 두 키로 두 번 나간다.
+                raise SystemExit(
+                    f"{path} 에 '{university}' 행이 둘 이상입니다 — 캐시가 대학 이름으로만\n"
+                    "갈려 두 캠퍼스가 같은 수집 결과를 받습니다. 다캠퍼스 지원은 캐시 키를\n"
+                    "캠퍼스 단위로 바꾸는 작업이 선행되어야 합니다."
+                )
+            seen.add(university)
             url = (r.get("url") or "").strip()
             rows.append(
                 UniversityRow(
-                    university=r["university"].strip(),
+                    university=university,
                     campus=r["campus"].strip(),
                     region=r["region"].strip(),
                     year=int(r["year"]),
                     url=url or None,
+                    # 문자열 그대로 싣는다 — float 변환도 범위 검증도 하지 않는다.
+                    # 검증은 백엔드 임포트 한 곳이다 (같은 규칙을 두 곳에 적지 않는다).
+                    latitude=(r.get("latitude") or "").strip(),
+                    longitude=(r.get("longitude") or "").strip(),
                 )
             )
     return rows

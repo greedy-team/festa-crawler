@@ -14,7 +14,8 @@ from schema import ExtractionResult, LineupItem
 
 def _row(**overrides) -> UniversityRow:
     base = dict(university="연세대학교", campus="신촌캠퍼스",
-                region="서울 서대문구", year=2026, url="https://example.com/post")
+                region="서울 서대문구", year=2026, url="https://example.com/post",
+                latitude="37.5665", longitude="126.9780")
     base.update(overrides)
     return UniversityRow(**base)
 
@@ -613,7 +614,8 @@ def _write_seed(dir_path: Path, year: int, rows: list[dict]) -> Path:
     path = dir_path / f"universities-{year}.csv"
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(
-            f, fieldnames=["university", "campus", "region", "year", "url"])
+            f, fieldnames=["university", "campus", "region", "year", "url",
+                           "latitude", "longitude"])
         w.writeheader()
         w.writerows(rows)
     return path
@@ -621,7 +623,8 @@ def _write_seed(dir_path: Path, year: int, rows: list[dict]) -> Path:
 
 def _seed_row(year: int = 2026, url: str = "") -> dict:
     return {"university": "연세대학교", "campus": "신촌캠퍼스",
-            "region": "서울 서대문구", "year": str(year), "url": url}
+            "region": "서울 서대문구", "year": str(year), "url": url,
+            "latitude": "37.5665", "longitude": "126.9780"}
 
 
 def test_run_writes_into_year_folder(tmp_path, monkeypatch):
