@@ -139,7 +139,7 @@ def test_build_rows():
               "image_urls": ["https://cdn.example.com/1.jpg", "https://cdn.example.com/2.jpg"],
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
-    assert frow["import_key"] == "연세대학교-2026"
+    assert frow["import_key"] == "연세대학교-신촌캠퍼스-2026"
     assert frow["host_name"] == "연세대학교"
     assert frow["name"] == "아카라카"
     assert frow["flag"] == "OK"
@@ -520,7 +520,7 @@ def test_process_row_new_records_carry_schema_version(tmp_path, monkeypatch):
 
 
 def test_import_key_format():
-    assert crawl.import_key("연세대학교", 2026) == "연세대학교-2026"
+    assert crawl.import_key("연세대학교", "신촌캠퍼스", 2026) == "연세대학교-신촌캠퍼스-2026"
 
 
 def test_import_key_links_festival_and_lineup():
@@ -531,8 +531,8 @@ def test_import_key_links_festival_and_lineup():
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
     lrows = build_lineup_rows(record, {})
-    assert frow["import_key"] == "연세대학교-2026"
-    assert [r["import_key"] for r in lrows] == ["연세대학교-2026"] * 3
+    assert frow["import_key"] == "연세대학교-신촌캠퍼스-2026"
+    assert [r["import_key"] for r in lrows] == ["연세대학교-신촌캠퍼스-2026"] * 3
     assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
     assert list(lrows[0].keys()) == crawl.LINEUP_FIELDS
 

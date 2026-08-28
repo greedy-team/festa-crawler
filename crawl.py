@@ -80,12 +80,14 @@ LINEUP_FIELDS = ["import_key", "day", "order", "artist_raw", "artist_canonical",
 ADMISSION_RAW_MAX_CHARS = 200
 
 
-def import_key(university: str, year: int) -> str:
-    """축제 1건의 안정적인 식별자(주최명-연도). 백엔드 명세의 import_key.
+def import_key(university: str, campus: str, year: int) -> str:
+    """축제 1건의 안정적인 식별자(주최명-캠퍼스-연도). 백엔드 명세의 import_key.
 
-    시드에서 university+year 조합이 유일함을 전제한다.
+    키는 시드 행과 1:1이다 — 시드가 캠퍼스 단위 행이므로 한 주최가 캠퍼스별로 축제를
+    열어도 갈린다. 캠퍼스는 시드 상수라 흔들리지 않는다 — 일정에서 파생하는 값(월 등)을
+    키에 넣으면 연기될 때 키가 바뀌어 임포트가 기존 축제를 못 찾는다.
     """
-    return f"{university}-{year}"
+    return f"{university}-{campus}-{year}"
 
 
 def _attempt_url(url: str, row: UniversityRow) -> dict:
@@ -195,7 +197,7 @@ def build_festival_row(record: dict) -> dict:
     ext = record["extraction"] or {}
     handle = ext.get("instagram_handle") or ""
     return {
-        "import_key": import_key(record["university"], record["year"]),
+        "import_key": import_key(record["university"], record["campus"], record["year"]),
         "host_name": record["university"],
         "name": ext.get("festival_name") or "",
         "start_date": ext.get("start_date") or "",
@@ -226,7 +228,7 @@ def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
     ext = record["extraction"]
     if not ext or record["flag"] != "ok":
         return []
-    key = import_key(record["university"], record["year"])
+    key = import_key(record["university"], record["campus"], record["year"])
     order_by_day: dict = {}
     rows = []
     for item in ext["lineup"]:
