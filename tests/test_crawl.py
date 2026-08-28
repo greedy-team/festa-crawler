@@ -121,6 +121,7 @@ def test_process_row_cache_hit_refreshes_campus_region(tmp_path, monkeypatch):
 def test_csv_headers_match_backend_spec():
     assert crawl.FESTIVAL_FIELDS == [
         "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
+        "latitude", "longitude",
         "poster_url", "image_urls", "description", "hashtags",
         "external_visitor_policy", "verification_method", "ticket_type",
         "ticket_open_at", "admission_raw", "source_url", "discovery", "flag",
@@ -134,6 +135,7 @@ def test_csv_headers_match_backend_spec():
 def test_build_rows():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
               "poster_image_url": "https://example.com/p.jpg",
               "image_urls": ["https://cdn.example.com/1.jpg", "https://cdn.example.com/2.jpg"],
@@ -169,7 +171,8 @@ def test_build_rows():
 
 def test_build_rows_without_extraction():
     record = {"university": "고려대학교", "campus": "안암캠퍼스",
-              "region": "서울 성북구", "year": 2026, "url": None, "discovery": "",
+              "region": "서울 성북구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780", "url": None, "discovery": "",
               "flag": "no_source", "poster_image_url": None, "extraction": None}
     frow = build_festival_row(record)
     assert frow["flag"] == "NO_SOURCE"
@@ -180,6 +183,7 @@ def test_build_rows_without_extraction():
 def test_build_lineup_rows_skips_non_ok_festival():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "flag": "mismatch", "discovery": "",
               "poster_image_url": None, "extraction": _extraction().model_dump()}
     assert build_lineup_rows(record, {}) == []
@@ -189,6 +193,7 @@ def test_admission_raw_truncated_to_200_chars():
     long_ext = _extraction().model_copy(update={"admission_raw": "가" * 300})
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
               "poster_image_url": None, "extraction": long_ext.model_dump()}
     assert len(build_festival_row(record)["admission_raw"]) == 200
@@ -201,6 +206,7 @@ def test_build_lineup_rows_day_none_gets_own_order():
     ]})
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
               "poster_image_url": None, "extraction": ext.model_dump()}
     lrows = build_lineup_rows(record, {})
@@ -314,6 +320,7 @@ def test_process_row_passes_candidates_to_extract(tmp_path, monkeypatch):
 def test_build_festival_row_includes_instagram_url():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
               "poster_image_url": None,
               "extraction": _extraction().model_dump()}
@@ -386,7 +393,8 @@ def test_process_row_keeps_manual_failure_flag(tmp_path, monkeypatch):
 
 def test_build_festival_row_includes_discovery():
     record = {"university": "한양대학교", "campus": "서울캠퍼스", "region": "서울 성동구",
-              "year": 2026, "seed_url": None, "url": "https://found.example.com/p",
+              "year": 2026, "latitude": "37.5573", "longitude": "127.0453",
+              "seed_url": None, "url": "https://found.example.com/p",
               "discovery": "search", "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
@@ -526,6 +534,7 @@ def test_import_key_format():
 def test_import_key_links_festival_and_lineup():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "discovery": "manual",
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
@@ -540,6 +549,7 @@ def test_import_key_links_festival_and_lineup():
 def test_lineup_rows_drop_denormalized_columns():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "discovery": "manual",
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
@@ -677,6 +687,7 @@ def test_run_does_not_touch_other_year(tmp_path, monkeypatch):
 def test_build_lineup_rows_applies_mapping():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "discovery": "manual",
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
@@ -688,6 +699,7 @@ def test_build_lineup_rows_applies_mapping():
 def test_build_lineup_rows_falls_back_to_raw_when_unmapped():
     record = {"university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
               "url": "https://example.com/post", "discovery": "manual",
               "flag": "ok", "poster_image_url": None,
               "extraction": _extraction().model_dump()}
@@ -769,3 +781,52 @@ def test_run_guard_ignores_fresh_clone_and_year_layout(tmp_path, monkeypatch):
     crawl.run(2026, base)      # 이제 output/2026/festivals.csv 가 있다
 
     assert (base / "2026" / "festivals.csv").exists()
+
+
+def test_festival_row_carries_seed_coordinates():
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스", "year": 2026,
+              "latitude": "37.5665", "longitude": "126.9780",
+              "url": "https://example.com/post", "discovery": "manual", "flag": "ok",
+              "poster_image_url": None, "image_urls": [],
+              "extraction": _extraction().model_dump()}
+    frow = crawl.build_festival_row(record)
+    assert frow["latitude"] == "37.5665"
+    assert frow["longitude"] == "126.9780"
+    assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
+
+
+def test_festival_row_keeps_blank_coordinates():
+    """빈 좌표를 크롤러가 막지 않는다 — 백엔드 발행 게이트가 COORDINATES_MISSING으로 막는다."""
+    record = {"university": "연세대학교", "campus": "신촌캠퍼스", "year": 2026,
+              "latitude": "", "longitude": "",
+              "url": "https://example.com/post", "discovery": "manual", "flag": "ok",
+              "poster_image_url": None, "image_urls": [],
+              "extraction": _extraction().model_dump()}
+    frow = crawl.build_festival_row(record)
+    assert frow["latitude"] == ""
+    assert frow["longitude"] == ""
+
+
+def test_process_row_cache_hit_refreshes_coordinates(tmp_path, monkeypatch):
+    """좌표 없이 기록된 구 캐시로 히트해도 시드 좌표가 실린다.
+
+    이 갱신이 없으면 기존 캐시로 히트한 대학의 좌표가 빈 값으로 나간다 —
+    오류가 나지 않고 결과만 틀리는 종류다.
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    cached = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
+              "region": "서울 서대문구", "year": 2026,
+              "seed_url": "https://example.com/post", "url": "https://example.com/post",
+              "discovery": "manual", "flag": "ok", "poster_image_url": None,
+              "extraction": _extraction().model_dump()}
+    (raw_dir / "연세대학교.json").write_text(json.dumps(cached), "utf-8")
+
+    def boom(url):
+        raise AssertionError("캐시 적중이면 fetch하면 안 됨")
+
+    monkeypatch.setattr(crawl, "fetch_body", boom)
+    record = process_row(_row(), tmp_path)
+    assert record["latitude"] == "37.5665"
+    assert record["longitude"] == "126.9780"
+

@@ -70,6 +70,7 @@ SCHEMA_VERSION = 2
 
 FESTIVAL_FIELDS = [
     "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
+    "latitude", "longitude",
     "poster_url", "image_urls", "description", "hashtags",
     "external_visitor_policy", "verification_method", "ticket_type",
     "ticket_open_at", "admission_raw", "source_url", "discovery", "flag",
@@ -139,6 +140,8 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
             # 시드 전용 필드는 현재 행 기준으로 갱신 (추출 결과에는 영향 없음)
             cached["campus"] = row.campus
             cached["region"] = row.region
+            cached["latitude"] = row.latitude
+            cached["longitude"] = row.longitude
             return cached
         if (cached.get("flag") == "ok"
                 and cached.get("seed_url") == row.url
@@ -152,6 +155,7 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
         "schema_version": SCHEMA_VERSION,
         "university": row.university, "campus": row.campus,
         "region": row.region, "year": row.year,
+        "latitude": row.latitude, "longitude": row.longitude,
         "seed_url": row.url, "url": row.url, "discovery": "",
         "flag": "no_source", "poster_image_url": None, "image_urls": [],
         "extraction": None,
@@ -189,6 +193,8 @@ def _keep_stale_on_failure(record: dict, stale_ok: dict | None, row: UniversityR
         return record
     stale_ok["campus"] = row.campus
     stale_ok["region"] = row.region
+    stale_ok["latitude"] = row.latitude
+    stale_ok["longitude"] = row.longitude
     print("  -> 재수집 실패, 이전 결과 유지", flush=True)
     return stale_ok
 
@@ -203,6 +209,9 @@ def build_festival_row(record: dict) -> dict:
         "start_date": ext.get("start_date") or "",
         "end_date": ext.get("end_date") or "",
         "venue_name": ext.get("venue_name") or "",
+        # 시드 문자열 그대로. flag != OK인 행에도 실린다 — 수집 성공 여부와 무관하다
+        "latitude": record["latitude"],
+        "longitude": record["longitude"],
         "poster_url": record["poster_image_url"] or "",
         "image_urls": "|".join(record.get("image_urls") or []),
         "description": ext.get("description") or "",
