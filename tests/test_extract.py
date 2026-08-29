@@ -113,6 +113,30 @@ def test_prompt_includes_new_field_rules(monkeypatch):
         assert token in seen["prompt"]
 
 
+def test_prompt_includes_single_day_rules(monkeypatch):
+    """하루짜리 축제에서 확정되는 값을 추론하도록 프롬프트가 지시하는지 확인한다.
+
+    원문이 "5월 22일 개최"처럼 날짜 하나만 적으면 end_date와 각 출연자의 day가
+    비어 나왔다. 정보가 없는 게 아니라 하루라는 사실에서 확정되는 값이다.
+    프롬프트의 실제 효과는 재크롤 실측으로 확인하며, 이 테스트는 지시가
+    프롬프트에서 사라지지 않게 잡아둔다.
+    """
+    seen = {}
+
+    def fake_call(prompt, timeout=120, tools=""):
+        seen["prompt"] = prompt
+        return ('{"found": true, "university_name": "이화여자대학교", "year": 2026,'
+                ' "start_date": "2026-05-22", "end_date": "2026-05-22",'
+                ' "lineup": [{"artist_raw": "NCT WISH", "day": 1}]}')
+
+    monkeypatch.setattr(extract, "call_claude", fake_call)
+    result = extract.extract("본문", "이화여자대학교", 2026)
+    assert result.start_date == result.end_date == "2026-05-22"
+    assert result.lineup[0].day == 1
+    assert "하루" in seen["prompt"]
+    assert "end_date를" in seen["prompt"]
+
+
 def test_call_claude_passes_tools_flag(monkeypatch):
     captured = {}
 

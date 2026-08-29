@@ -135,6 +135,7 @@ def test_fetch_body_wires_image_urls(monkeypatch):
 
     class Resp:
         text = html
+        headers = {"Content-Type": "text/html; charset=utf-8"}
 
         def raise_for_status(self):
             pass
@@ -154,6 +155,7 @@ def test_fetch_text_returns_body(monkeypatch):
 
     class Resp:
         text = "<urlset><loc>https://blog.example.com/entry/x</loc></urlset>"
+        headers = {"Content-Type": "application/xml; charset=utf-8"}
 
         def raise_for_status(self):
             pass
@@ -190,6 +192,7 @@ def test_fetch_text_respects_rate_limit(monkeypatch):
 
     class Resp:
         text = "ok"
+        headers = {"Content-Type": "application/xml; charset=utf-8"}
 
         def raise_for_status(self):
             pass
@@ -197,3 +200,66 @@ def test_fetch_text_respects_rate_limit(monkeypatch):
     monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp())
     fetch.fetch_text("https://blog.example.com/sitemap.xml")
     assert hosts == ["blog.example.com"]
+
+
+def _response(body: str, content_type: str) -> "fetch.requests.Response":
+    """실제 requests.Response를 만든다.
+
+    가짜 객체로 대신하면 `.text`가 encoding을 어떻게 쓰는지를 우리가 흉내 내게 되어,
+    정작 검증하려는 requests의 폴백 동작을 테스트가 비껴간다.
+    """
+    response = fetch.requests.Response()
+    response.status_code = 200
+    response._content = body.encode("utf-8")
+    response.headers["Content-Type"] = content_type
+    # 어댑터가 헤더에서 채우는 값. charset이 없으면 requests는 ISO-8859-1로 폴백한다.
+    response.encoding = fetch.requests.utils.get_encoding_from_headers(response.headers)
+    return response
+
+
+def test_fetch_body_decodes_utf8_when_header_omits_charset(monkeypatch):
+    """charset 없는 응답을 ISO-8859-1로 읽어 한국어 본문이 깨지지 않아야 한다.
+
+    requests는 `Content-Type`에 charset이 없으면 RFC 2616대로 ISO-8859-1을 쓰고
+    HTML의 `<meta charset>`은 보지 않는다. 오류가 나지 않고 본문만 깨지므로
+    추출 결과에서 값이 비는 형태로만 드러난다.
+    """
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+    html = '<div class="entry-content">' + "축제 라인업 공개" * 30 + "</div>"
+    response = _response(html, "text/html")
+    assert response.encoding == "ISO-8859-1"  # 전제 확인 — 이게 아니면 테스트가 무의미하다
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: response)
+    result = fetch.fetch_body("https://blog.example.com/post")
+
+    assert result.status == "ok"
+    assert "축제 라인업 공개" in result.body
+
+
+def test_fetch_body_keeps_declared_charset(monkeypatch):
+    """서버가 charset을 밝힌 경우에는 그 값을 덮지 않는다."""
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+    html = '<div class="entry-content">' + "축제 라인업 공개" * 30 + "</div>"
+    response = _response(html, "text/html; charset=utf-8")
+    assert response.encoding == "utf-8"
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: response)
+    result = fetch.fetch_body("https://blog.example.com/post")
+
+    assert result.status == "ok"
+    assert "축제 라인업 공개" in result.body
+    assert response.encoding == "utf-8"
+
+
+def test_fetch_text_decodes_utf8_when_header_omits_charset(monkeypatch):
+    """사이트맵 경로도 같은 디코딩을 탄다 — _decode를 두 곳이 공유한다."""
+    monkeypatch.setattr(fetch, "_robots_allowed", lambda url: True)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+    xml = "<urlset><loc>https://blog.example.com/축제</loc></urlset>"
+    response = _response(xml, "text/xml")  # text/*라야 requests가 ISO-8859-1로 폴백한다
+    assert response.encoding == "ISO-8859-1"
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: response)
+    assert "축제" in fetch.fetch_text("https://blog.example.com/sitemap.xml")

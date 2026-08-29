@@ -134,6 +134,19 @@ def instagram_candidates(html: str) -> list[str]:
     return found
 
 
+def _decode(resp: "requests.Response") -> str:
+    """응답 본문을 문서가 실제로 쓴 인코딩으로 읽는다.
+
+    Content-Type에 charset이 없으면 requests는 RFC 2616대로 ISO-8859-1을 쓰고
+    HTML·XML이 선언한 인코딩은 보지 않는다. 한국어 본문이 통째로 깨진 채 다음
+    단계로 넘어가며, 오류가 아니라 값이 비는 형태로만 드러난다.
+    서버가 charset을 밝힌 경우에는 그 선언을 존중한다.
+    """
+    if "charset" not in resp.headers.get("Content-Type", "").lower():
+        resp.encoding = resp.apparent_encoding or "utf-8"
+    return resp.text
+
+
 def fetch_text(url: str) -> str | None:
     """robots·요청 간격을 지켜 응답 본문을 문자열로 가져온다. 실패하면 None.
 
@@ -148,7 +161,7 @@ def fetch_text(url: str) -> str | None:
             url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS
         )
         resp.raise_for_status()
-        return resp.text
+        return _decode(resp)
     except requests.RequestException:
         return None
 
@@ -167,7 +180,7 @@ def fetch_body(url: str) -> FetchResult:
                 url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS
             )
             resp.raise_for_status()
-            html = resp.text
+            html = _decode(resp)
             break
         except requests.RequestException as e:
             last_error = str(e)
