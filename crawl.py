@@ -18,20 +18,49 @@ class UniversityRow:
     region: str
     year: int
     url: str | None
+    latitude: str
+    longitude: str
 
 
 def load_universities(path: Path) -> list[UniversityRow]:
     rows: list[UniversityRow] = []
+    seen: set[str] = set()
     with open(path, newline="", encoding="utf-8-sig") as f:
-        for r in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        missing = [c for c in ("latitude", "longitude")
+                   if c not in (reader.fieldnames or [])]
+        if missing:
+            # 좌표 없이 그냥 나가면 백엔드가 전 행을 발행 불가로 받는다 — 오류가 아니라
+            # "아무것도 화면에 안 뜬다"로 나타나서 원인을 찾기 어렵다.
+            raise SystemExit(
+                f"{path} 에 {', '.join(missing)} 컬럼이 없습니다 — 좌표 도입 전 시드입니다.\n"
+                "헤더를 university,campus,region,year,url,latitude,longitude 로 바꾸고\n"
+                "캠퍼스 정문 또는 축제 주무대 기준 좌표를 채운 뒤 다시 실행하세요."
+            )
+        for r in reader:
+            university = r["university"].strip()
+            if university in seen:
+                # 캐시가 대학 이름으로만 갈린다 (raw/{university}.json,
+                # discovered/{university}.json). 두 캠퍼스가 탐색 후보 캐시를 공유하고
+                # verify()는 캠퍼스를 구분하지 못해 같은 축제가 두 키로 두 번 나간다.
+                raise SystemExit(
+                    f"{path} 에 '{university}' 행이 둘 이상입니다 — 캐시가 대학 이름으로만\n"
+                    "갈려 두 캠퍼스가 같은 수집 결과를 받습니다. 다캠퍼스 지원은 캐시 키를\n"
+                    "캠퍼스 단위로 바꾸는 작업이 선행되어야 합니다."
+                )
+            seen.add(university)
             url = (r.get("url") or "").strip()
             rows.append(
                 UniversityRow(
-                    university=r["university"].strip(),
+                    university=university,
                     campus=r["campus"].strip(),
                     region=r["region"].strip(),
                     year=int(r["year"]),
                     url=url or None,
+                    # 문자열 그대로 싣는다 — float 변환도 범위 검증도 하지 않는다.
+                    # 검증은 백엔드 임포트 한 곳이다 (같은 규칙을 두 곳에 적지 않는다).
+                    latitude=(r.get("latitude") or "").strip(),
+                    longitude=(r.get("longitude") or "").strip(),
                 )
             )
     return rows
@@ -41,6 +70,7 @@ SCHEMA_VERSION = 2
 
 FESTIVAL_FIELDS = [
     "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
+    "latitude", "longitude",
     "poster_url", "image_urls", "description", "hashtags",
     "external_visitor_policy", "verification_method", "ticket_type",
     "ticket_open_at", "admission_raw", "source_url", "discovery", "flag",
@@ -51,12 +81,14 @@ LINEUP_FIELDS = ["import_key", "day", "order", "artist_raw", "artist_canonical",
 ADMISSION_RAW_MAX_CHARS = 200
 
 
-def import_key(university: str, year: int) -> str:
-    """축제 1건의 안정적인 식별자(주최명-연도). 백엔드 명세의 import_key.
+def import_key(university: str, campus: str, year: int) -> str:
+    """축제 1건의 안정적인 식별자(주최명-캠퍼스-연도). 백엔드 명세의 import_key.
 
-    시드에서 university+year 조합이 유일함을 전제한다.
+    키는 시드 행과 1:1이다 — 시드가 캠퍼스 단위 행이므로 한 주최가 캠퍼스별로 축제를
+    열어도 갈린다. 캠퍼스는 시드 상수라 흔들리지 않는다 — 일정에서 파생하는 값(월 등)을
+    키에 넣으면 연기될 때 키가 바뀌어 임포트가 기존 축제를 못 찾는다.
     """
-    return f"{university}-{year}"
+    return f"{university}-{campus}-{year}"
 
 
 def _attempt_url(url: str, row: UniversityRow) -> dict:
@@ -108,6 +140,8 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
             # 시드 전용 필드는 현재 행 기준으로 갱신 (추출 결과에는 영향 없음)
             cached["campus"] = row.campus
             cached["region"] = row.region
+            cached["latitude"] = row.latitude
+            cached["longitude"] = row.longitude
             return cached
         if (cached.get("flag") == "ok"
                 and cached.get("seed_url") == row.url
@@ -121,6 +155,7 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
         "schema_version": SCHEMA_VERSION,
         "university": row.university, "campus": row.campus,
         "region": row.region, "year": row.year,
+        "latitude": row.latitude, "longitude": row.longitude,
         "seed_url": row.url, "url": row.url, "discovery": "",
         "flag": "no_source", "poster_image_url": None, "image_urls": [],
         "extraction": None,
@@ -158,6 +193,8 @@ def _keep_stale_on_failure(record: dict, stale_ok: dict | None, row: UniversityR
         return record
     stale_ok["campus"] = row.campus
     stale_ok["region"] = row.region
+    stale_ok["latitude"] = row.latitude
+    stale_ok["longitude"] = row.longitude
     print("  -> 재수집 실패, 이전 결과 유지", flush=True)
     return stale_ok
 
@@ -166,12 +203,15 @@ def build_festival_row(record: dict) -> dict:
     ext = record["extraction"] or {}
     handle = ext.get("instagram_handle") or ""
     return {
-        "import_key": import_key(record["university"], record["year"]),
+        "import_key": import_key(record["university"], record["campus"], record["year"]),
         "host_name": record["university"],
         "name": ext.get("festival_name") or "",
         "start_date": ext.get("start_date") or "",
         "end_date": ext.get("end_date") or "",
         "venue_name": ext.get("venue_name") or "",
+        # 시드 문자열 그대로. flag != OK인 행에도 실린다 — 수집 성공 여부와 무관하다
+        "latitude": record["latitude"],
+        "longitude": record["longitude"],
         "poster_url": record["poster_image_url"] or "",
         "image_urls": "|".join(record.get("image_urls") or []),
         "description": ext.get("description") or "",
@@ -197,7 +237,7 @@ def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
     ext = record["extraction"]
     if not ext or record["flag"] != "ok":
         return []
-    key = import_key(record["university"], record["year"])
+    key = import_key(record["university"], record["campus"], record["year"])
     order_by_day: dict = {}
     rows = []
     for item in ext["lineup"]:
