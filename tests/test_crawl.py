@@ -141,7 +141,7 @@ def test_build_rows():
               "image_urls": ["https://cdn.example.com/1.jpg", "https://cdn.example.com/2.jpg"],
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
-    assert frow["import_key"] == "연세대학교-신촌캠퍼스-2026"
+    assert frow["import_key"] == "연세대학교-신촌캠퍼스-2026-05"
     assert frow["host_name"] == "연세대학교"
     assert frow["name"] == "아카라카"
     assert frow["flag"] == "OK"
@@ -528,7 +528,34 @@ def test_process_row_new_records_carry_schema_version(tmp_path, monkeypatch):
 
 
 def test_import_key_format():
-    assert crawl.import_key("연세대학교", "신촌캠퍼스", 2026) == "연세대학교-신촌캠퍼스-2026"
+    assert crawl.import_key("연세대학교", "신촌캠퍼스", 2026, "05") == "연세대학교-신촌캠퍼스-2026-05"
+
+
+def test_festival_month_from_start_date():
+    assert crawl.festival_month("2025-09-16") == "09"
+    assert crawl.festival_month("2026-05-21") == "05"
+
+
+def test_festival_month_unknown_when_no_usable_start_date():
+    # 백엔드가 빈 import_key를 거부하므로 세그먼트를 비우지 않고 00을 쓴다.
+    assert crawl.festival_month(None) == "00"
+    assert crawl.festival_month("") == "00"
+    assert crawl.festival_month("2025-09") == "00"
+
+
+def test_import_key_uses_unknown_month_when_start_date_missing():
+    # flag=OK인데 start_date가 빈 축제가 실제로 있다 (한국외대 2026).
+    ext = _extraction().model_dump()
+    ext["start_date"] = None
+    record = {"university": "한국외국어대학교", "campus": "서울캠퍼스",
+              "region": "서울 동대문구", "year": 2026,
+              "latitude": "37.5975", "longitude": "127.0583",
+              "url": "https://example.com/post", "discovery": "search",
+              "flag": "ok", "poster_image_url": None, "extraction": ext}
+    frow = build_festival_row(record)
+    lrows = build_lineup_rows(record, {})
+    assert frow["import_key"] == "한국외국어대학교-서울캠퍼스-2026-00"
+    assert {r["import_key"] for r in lrows} == {"한국외국어대학교-서울캠퍼스-2026-00"}
 
 
 def test_import_key_links_festival_and_lineup():
@@ -540,8 +567,8 @@ def test_import_key_links_festival_and_lineup():
               "extraction": _extraction().model_dump()}
     frow = build_festival_row(record)
     lrows = build_lineup_rows(record, {})
-    assert frow["import_key"] == "연세대학교-신촌캠퍼스-2026"
-    assert [r["import_key"] for r in lrows] == ["연세대학교-신촌캠퍼스-2026"] * 3
+    assert frow["import_key"] == "연세대학교-신촌캠퍼스-2026-05"
+    assert [r["import_key"] for r in lrows] == ["연세대학교-신촌캠퍼스-2026-05"] * 3
     assert list(frow.keys()) == crawl.FESTIVAL_FIELDS
     assert list(lrows[0].keys()) == crawl.LINEUP_FIELDS
 
