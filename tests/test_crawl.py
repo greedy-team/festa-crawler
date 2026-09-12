@@ -61,7 +61,7 @@ def test_process_row_happy_path_writes_cache(tmp_path, monkeypatch):
 def test_process_row_uses_cache(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    cached = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
+    cached = {"schema_version": crawl.SCHEMA_VERSION, "university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
               "seed_url": "https://example.com/post", "url": "https://example.com/post",
               "discovery": "manual", "flag": "ok", "poster_image_url": None,
@@ -102,7 +102,7 @@ def test_process_row_refetches_when_cached_year_differs(tmp_path, monkeypatch):
 def test_process_row_cache_hit_refreshes_campus_region(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    cached = {"schema_version": 2, "university": "연세대학교", "campus": "옛캠퍼스",
+    cached = {"schema_version": crawl.SCHEMA_VERSION, "university": "연세대학교", "campus": "옛캠퍼스",
               "region": "서울 옛구", "year": 2026,
               "seed_url": "https://example.com/post", "url": "https://example.com/post",
               "discovery": "manual", "flag": "ok", "poster_image_url": None,
@@ -406,7 +406,7 @@ def test_build_festival_row_includes_discovery():
 def test_process_row_cache_keyed_on_seed_url(tmp_path, monkeypatch):
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    cached = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
+    cached = {"schema_version": crawl.SCHEMA_VERSION, "university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구",
               "year": 2026, "seed_url": None, "url": "https://found.example.com/p",
               "discovery": "search", "flag": "ok", "poster_image_url": None,
@@ -438,6 +438,32 @@ def test_process_row_recollects_versionless_cache(tmp_path, monkeypatch):
     assert record["schema_version"] == crawl.SCHEMA_VERSION
     cached = json.loads((raw_dir / "연세대학교.json").read_text("utf-8"))
     assert cached["schema_version"] == crawl.SCHEMA_VERSION   # 새 캐시로 갱신됨
+
+
+def test_process_row_recollects_stale_version_cache(tmp_path, monkeypatch):
+    """버전 번호가 다른 캐시도 재수집 대상이다.
+
+    SCHEMA_VERSION을 올리는 것이 재수집을 부르는 유일한 손잡이다. 판정이
+    「키가 있는가」로 바뀌면 번호만 올려도 옛 캐시가 그대로 살아남는다.
+    """
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    old = {"schema_version": crawl.SCHEMA_VERSION - 1,
+           "university": "연세대학교", "campus": "신촌캠퍼스",
+           "region": "서울 서대문구", "year": 2026,
+           "seed_url": "https://example.com/post", "url": "https://example.com/post",
+           "discovery": "manual", "flag": "ok", "poster_image_url": None,
+           "extraction": _extraction().model_dump()}
+    (raw_dir / "연세대학교.json").write_text(json.dumps(old), "utf-8")
+    fetched = []
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: fetched.append(url) or FetchResult(
+        status="ok", body="본문" * 100, image_urls=[]))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+
+    record = process_row(_row(), tmp_path)
+
+    assert fetched, "옛 버전 캐시인데 재수집하지 않았다"
+    assert record["schema_version"] == crawl.SCHEMA_VERSION
 
 
 def test_process_row_keeps_old_ok_cache_when_recollect_fails(tmp_path, monkeypatch):
@@ -505,7 +531,7 @@ def test_process_row_no_fallback_when_seed_url_changed(tmp_path, monkeypatch):
     """시드 url이 바뀐 경우는 schema_version 폴백 대상이 아니다 — 재수집 실패가 그대로 남아야 한다."""
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    old = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
+    old = {"schema_version": crawl.SCHEMA_VERSION, "university": "연세대학교", "campus": "신촌캠퍼스",
            "region": "서울 서대문구", "year": 2026,
            "seed_url": "https://old.example.com/post", "url": "https://old.example.com/post",
            "discovery": "manual", "flag": "ok", "poster_image_url": None,
@@ -815,7 +841,7 @@ def test_process_row_cache_hit_refreshes_coordinates(tmp_path, monkeypatch):
     """
     raw_dir = tmp_path / "raw"
     raw_dir.mkdir()
-    cached = {"schema_version": 2, "university": "연세대학교", "campus": "신촌캠퍼스",
+    cached = {"schema_version": crawl.SCHEMA_VERSION, "university": "연세대학교", "campus": "신촌캠퍼스",
               "region": "서울 서대문구", "year": 2026,
               "seed_url": "https://example.com/post", "url": "https://example.com/post",
               "discovery": "manual", "flag": "ok", "poster_image_url": None,

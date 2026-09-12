@@ -66,7 +66,7 @@ def load_universities(path: Path) -> list[UniversityRow]:
     return rows
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 FESTIVAL_FIELDS = [
     "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
