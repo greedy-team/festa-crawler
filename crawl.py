@@ -3,6 +3,7 @@ import argparse
 import csv
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -81,14 +82,30 @@ LINEUP_FIELDS = ["import_key", "day", "order", "artist_raw", "artist_canonical",
 ADMISSION_RAW_MAX_CHARS = 200
 
 
-def import_key(university: str, campus: str, year: int) -> str:
-    """축제 1건의 안정적인 식별자(주최명-캠퍼스-연도). 백엔드 명세의 import_key.
+UNKNOWN_MONTH = "00"
 
-    키는 시드 행과 1:1이다 — 시드가 캠퍼스 단위 행이므로 한 주최가 캠퍼스별로 축제를
-    열어도 갈린다. 캠퍼스는 시드 상수라 흔들리지 않는다 — 일정에서 파생하는 값(월 등)을
-    키에 넣으면 연기될 때 키가 바뀌어 임포트가 기존 축제를 못 찾는다.
+
+def festival_month(start_date: str | None) -> str:
+    """start_date('2025-09-16')의 월을 두 자리로. 없거나 형식이 다르면 '00'.
+
+    백엔드는 빈 import_key를 거부하므로 월을 모른다고 세그먼트를 비울 수 없다.
+    flag가 OK인데 start_date가 빈 축제가 실제로 있다 (한국외대 2026).
     """
-    return f"{university}-{campus}-{year}"
+    if not start_date:
+        return UNKNOWN_MONTH
+    matched = re.fullmatch(r"\d{4}-(\d{2})-\d{2}", start_date.strip())
+    return matched.group(1) if matched else UNKNOWN_MONTH
+
+
+def import_key(university: str, campus: str, year: int, month: str) -> str:
+    """축제 1건의 식별자(주최명-캠퍼스-연도-월). 백엔드 명세의 import_key.
+
+    캠퍼스까지는 시드 상수라 흔들리지 않는다. 월은 다르다 — 추출한 start_date에서
+    파생하므로 일정이 월을 넘겨 바뀌거나 나중에 날짜를 찾으면(00 → 09) 키가 바뀐다.
+    그때 임포트는 기존 축제를 못 찾아 중복 행을 만든다. 이 위험을 알고 월을 넣은 이유는
+    한 캠퍼스가 한 해에 축제를 둘 여는 경우(봄·가을)를 담기 위해서다 — 서울대 2025가 그렇다.
+    """
+    return f"{university}-{campus}-{year}-{month}"
 
 
 def _attempt_url(url: str, row: UniversityRow) -> dict:
@@ -203,7 +220,8 @@ def build_festival_row(record: dict) -> dict:
     ext = record["extraction"] or {}
     handle = ext.get("instagram_handle") or ""
     return {
-        "import_key": import_key(record["university"], record["campus"], record["year"]),
+        "import_key": import_key(record["university"], record["campus"], record["year"],
+                                 festival_month(ext.get("start_date"))),
         "host_name": record["university"],
         "name": ext.get("festival_name") or "",
         "start_date": ext.get("start_date") or "",
@@ -237,7 +255,8 @@ def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
     ext = record["extraction"]
     if not ext or record["flag"] != "ok":
         return []
-    key = import_key(record["university"], record["campus"], record["year"])
+    key = import_key(record["university"], record["campus"], record["year"],
+                     festival_month(ext.get("start_date")))
     order_by_day: dict = {}
     rows = []
     for item in ext["lineup"]:
