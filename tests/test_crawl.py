@@ -883,3 +883,29 @@ def test_process_row_cache_hit_refreshes_coordinates(tmp_path, monkeypatch):
     assert record["latitude"] == "37.5665"
     assert record["longitude"] == "126.9780"
 
+
+
+def test_process_row_records_published_at_and_warns_on_year_gap(tmp_path, monkeypatch):
+    # 게시일은 표시용 신호다 — 연도가 어긋나도 행을 떨어뜨리지 않는다
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100, published_at="2023-05-11T20:30:25+09:00"))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+    record = process_row(_row(), tmp_path)
+    assert record["flag"] == "ok"
+    assert record["published_at"] == "2023-05-11T20:30:25+09:00"
+    assert "2023" in record["date_warning"]
+
+
+def test_process_row_has_no_date_warning_when_years_agree(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100, published_at="2026-05-10T20:28:00+09:00"))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+    record = process_row(_row(), tmp_path)
+    assert record["date_warning"] is None
+
+
+def test_process_row_without_source_has_date_fields(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    record = process_row(_row(url=None), tmp_path)
+    assert record["published_at"] is None
+    assert record["date_warning"] is None

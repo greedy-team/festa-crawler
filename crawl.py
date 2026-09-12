@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from discover import MAX_CANDIDATES, discover_cached, discover_sitemap
-from extract import ExtractError, extract, verify
+from extract import ExtractError, date_warning, extract, verify
 from fetch import fetch_body
 
 
@@ -67,7 +67,7 @@ def load_universities(path: Path) -> list[UniversityRow]:
     return rows
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 FESTIVAL_FIELDS = [
     "import_key", "host_name", "name", "start_date", "end_date", "venue_name",
@@ -112,7 +112,9 @@ def _attempt_url(url: str, row: UniversityRow) -> dict:
     """URL 1건을 수집·추출·검증한다. flag/poster_image_url/extraction만 담아 돌려준다."""
     fr = fetch_body(url)
     attempt = {"flag": fr.status, "poster_image_url": fr.poster_image_url,
-               "image_urls": fr.image_urls, "extraction": None}
+               "image_urls": fr.image_urls, "extraction": None,
+               "published_at": fr.published_at,
+               "date_warning": date_warning(fr.published_at, row.year)}
     if fr.status != "ok":
         return attempt
     try:
@@ -175,7 +177,7 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
         "latitude": row.latitude, "longitude": row.longitude,
         "seed_url": row.url, "url": row.url, "discovery": "",
         "flag": "no_source", "poster_image_url": None, "image_urls": [],
-        "extraction": None,
+        "extraction": None, "published_at": None, "date_warning": None,
     }
 
     if row.url is not None:
