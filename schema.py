@@ -18,7 +18,7 @@ class LineupItem(BaseModel):
 class ExtractionResult(BaseModel):
     found: bool
     university_name: str
-    year: int
+    year: int | None = None
     festival_name: str | None = None
     start_date: str | None = None
     end_date: str | None = None
