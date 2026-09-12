@@ -1,4 +1,5 @@
 """본문 수집: robots 확인 → 요청 간격 → 티스토리 셀렉터 → trafilatura 폴백."""
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -41,6 +42,7 @@ class FetchResult:
     error: str | None = None
     instagram_candidates: list[str] = field(default_factory=list)
     image_urls: list[str] = field(default_factory=list)
+    published_at: str | None = None
 
 
 def _respect_rate_limit(host: str) -> None:
@@ -70,6 +72,79 @@ def _robots_allowed(url: str) -> bool:
             _ROBOTS[host] = None
     rp = _ROBOTS[host]
     return True if rp is None else rp.can_fetch(USER_AGENT, url)
+
+
+NAVER_BLOG_HOST = "blog.naver.com"
+
+
+def readable_url(url: str) -> str:
+    """본문을 실제로 읽을 수 있는 주소로 바꾼다.
+
+    blog.naver.com은 본문을 iframe 안에 두어 겉 페이지에는 본문이 없다 — 요청은 성공하고
+    본문만 비어 empty_body가 된다. 모바일 호스트는 같은 글을 본문 그대로 낸다.
+    출처로 기록할 주소는 바꾸지 않는다. 사람이 여는 것은 원래 주소다.
+    """
+    parts = urlparse(url)
+    if parts.netloc == NAVER_BLOG_HOST:
+        return parts._replace(netloc="m." + NAVER_BLOG_HOST).geturl()
+    return url
+
+
+# 문서가 게시일을 밝히는 자리. 실측(출처 107곳)에서 meta가 77%, 나머지 신호가 6%를 덮었다.
+PUBLISHED_META = ("article:published_time", "og:regDate", "datePublished")
+PUBLISHED_SELECTORS = ".blog_date, .se_publishDate, .article-date"
+
+
+def _date_published(node) -> str | None:
+    """JSON-LD 안에서 datePublished를 찾는다 (@graph 같은 중첩 포함)."""
+    if isinstance(node, dict):
+        if node.get("datePublished"):
+            return str(node["datePublished"]).strip()
+        for value in node.values():
+            found = _date_published(value)
+            if found:
+                return found
+    elif isinstance(node, list):
+        for item in node:
+            found = _date_published(item)
+            if found:
+                return found
+    return None
+
+
+def published_at(html: str) -> str | None:
+    """문서가 밝힌 게시일 원문. 못 찾으면 None.
+
+    LLM을 지나지 않는 유일한 사실이라, 추출 결과의 연도를 대조할 외부 기준이 된다.
+    값을 해석하지 않고 원문 그대로 돌려준다 — 사이트마다 표기가 다르다.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+
+    for prop in PUBLISHED_META:
+        tag = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
+        if tag and (tag.get("content") or "").strip():
+            return tag["content"].strip()
+
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        found = _date_published(data)
+        if found:
+            return found
+
+    node = soup.select_one(PUBLISHED_SELECTORS)
+    if node and node.get_text(strip=True):
+        return node.get_text(strip=True)
+
+    tag = soup.find("time")
+    if tag:
+        value = (tag.get("datetime") or tag.get_text(strip=True)).strip()
+        if value:
+            return value
+
+    return None
 
 
 def parse_html(html: str, base_url: str = "") -> tuple[str | None, str | None, list[str]]:
@@ -167,17 +242,18 @@ def fetch_text(url: str) -> str | None:
 
 
 def fetch_body(url: str) -> FetchResult:
-    if not _robots_allowed(url):
+    target = readable_url(url)
+    if not _robots_allowed(target):
         return FetchResult(status="fetch_failed", error="robots_disallowed")
 
-    host = urlparse(url).netloc
+    host = urlparse(target).netloc
     html = None
     last_error = None
     for _ in range(2):  # 최초 1회 + 재시도 1회
         _respect_rate_limit(host)
         try:
             resp = requests.get(
-                url, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS
+                target, headers={"User-Agent": USER_AGENT}, timeout=TIMEOUT_SECONDS
             )
             resp.raise_for_status()
             html = _decode(resp)
@@ -188,9 +264,12 @@ def fetch_body(url: str) -> FetchResult:
     if html is None:
         return FetchResult(status="fetch_failed", error=last_error)
 
-    body, og, images = parse_html(html, base_url=url)
+    body, og, images = parse_html(html, base_url=target)
     candidates = instagram_candidates(html)
+    published = published_at(html)
     if body is None:
-        return FetchResult(status="empty_body", poster_image_url=og, instagram_candidates=candidates)
+        return FetchResult(status="empty_body", poster_image_url=og,
+                           instagram_candidates=candidates, published_at=published)
     return FetchResult(status="ok", body=body, poster_image_url=og,
-                       image_urls=images, instagram_candidates=candidates)
+                       image_urls=images, instagram_candidates=candidates,
+                       published_at=published)
