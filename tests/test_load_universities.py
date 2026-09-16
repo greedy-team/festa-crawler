@@ -7,9 +7,11 @@ from crawl import load_universities
 CSV_PATH = Path(__file__).parent.parent / "universities-2026.csv"
 
 
-def test_loads_29_rows():
+def test_loads_real_seed():
+    # 서울대는 봄·가을 두 행이라 행 수(30)와 대학 수(29)가 다르다
     rows = load_universities(CSV_PATH)
-    assert len(rows) == 29
+    assert len(rows) == 30
+    assert len({r.university for r in rows}) == 29
 
 
 def test_url_empty_becomes_none():
