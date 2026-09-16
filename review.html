@@ -111,8 +111,8 @@ function renderDetail(f) {
   $("detail").innerHTML = `
     <h2>${esc(f.import_key)}</h2>
     <p>
-      <button class="rerun" data-uni="${esc(f.host_name)}" data-rediscover="0">다시 돌리기</button>
-      <button class="rerun" data-uni="${esc(f.host_name)}" data-rediscover="1">탐색부터</button>
+      <button class="rerun" data-uni="${esc(f.cache_slug)}" data-rediscover="0">다시 돌리기</button>
+      <button class="rerun" data-uni="${esc(f.cache_slug)}" data-rediscover="1">탐색부터</button>
     </p>
     <table>${fields.map(([k, v]) =>
       `<tr><th>${esc(k)}</th><td>${esc(v) || "—"}</td></tr>`).join("")}</table>
@@ -143,10 +143,10 @@ function renderArtists() {
           <td>${esc(a.genre)} / ${esc(a.other_names)}</td></tr>`).join("")}</table>`;
 }
 
-async function run(job, hostName, rediscover) {
+async function run(job, slug, rediscover) {
   const res = await fetch("/api/run", {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ job, university: hostName, rediscover }),
+    body: JSON.stringify({ job, university: slug, rediscover }),
   });
   const body = await res.json();
   if (!res.ok) { alert(body.error); return; }
