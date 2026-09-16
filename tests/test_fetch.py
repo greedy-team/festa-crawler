@@ -263,3 +263,92 @@ def test_fetch_text_decodes_utf8_when_header_omits_charset(monkeypatch):
 
     monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: response)
     assert "축제" in fetch.fetch_text("https://blog.example.com/sitemap.xml")
+
+
+def test_naver_blog_url_is_read_from_mobile_host():
+    # blog.naver.com은 본문이 iframe 안이라 빈 본문이 된다. 모바일 주소는 본문을 직접 낸다.
+    assert (fetch.readable_url("https://blog.naver.com/travelnote77/224280969490")
+            == "https://m.blog.naver.com/travelnote77/224280969490")
+
+
+def test_readable_url_keeps_other_hosts():
+    assert (fetch.readable_url("https://memogipost.tistory.com/entry/festival")
+            == "https://memogipost.tistory.com/entry/festival")
+
+
+def test_readable_url_keeps_already_mobile_naver():
+    url = "https://m.blog.naver.com/travelnote77/224280969490"
+    assert fetch.readable_url(url) == url
+
+
+def test_published_at_reads_article_published_time():
+    html = ('<html><head>'
+            '<meta property="article:published_time" content="2026-09-01T10:29:20+09:00">'
+            '</head><body>본문</body></html>')
+    assert fetch.published_at(html) == "2026-09-01T10:29:20+09:00"
+
+
+def test_published_at_reads_json_ld():
+    html = ('<script type="application/ld+json">'
+            '{"@type":"NewsArticle","datePublished":"2023-05-11T20:30:25+09:00"}'
+            '</script>')
+    assert fetch.published_at(html) == "2023-05-11T20:30:25+09:00"
+
+
+def test_published_at_reads_naver_blog_date():
+    # 네이버 모바일은 meta가 없고 본문에 게시일을 둔다
+    html = '<html><body><p class="blog_date">2026. 5. 10. 20:28</p></body></html>'
+    assert fetch.published_at(html) == "2026. 5. 10. 20:28"
+
+
+def test_published_at_prefers_meta_over_selector():
+    html = ('<meta property="article:published_time" content="2026-09-01T10:29:20+09:00">'
+            '<p class="blog_date">2020. 1. 1. 00:00</p>')
+    assert fetch.published_at(html) == "2026-09-01T10:29:20+09:00"
+
+
+def test_published_at_none_when_absent():
+    assert fetch.published_at(read("tistory_sample.html")) is None
+
+
+def test_published_at_reads_time_element():
+    html = '<article><time datetime="2024-05-20T09:00:00+09:00">2024년 5월 20일</time></article>'
+    assert fetch.published_at(html) == "2024-05-20T09:00:00+09:00"
+
+
+class _Resp:
+    status_code = 200
+    headers = {"Content-Type": "text/html; charset=utf-8"}
+
+    def __init__(self, text):
+        self.text = text
+
+    def raise_for_status(self):
+        pass
+
+
+def test_fetch_body_reads_naver_from_mobile_host_and_carries_published_at(monkeypatch):
+    requested: list[str] = []
+    html = ('<meta property="article:published_time" content="2026-05-10T20:28:00+09:00">'
+            '<div class="entry-content">' + "본문" * 60 + "</div>")
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: requested.append(url) or _Resp(html))
+    monkeypatch.setitem(fetch._ROBOTS, "m.blog.naver.com", None)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+
+    result = fetch.fetch_body("https://blog.naver.com/travelnote77/224280969490")
+
+    assert requested == ["https://m.blog.naver.com/travelnote77/224280969490"]
+    assert result.status == "ok"
+    assert result.published_at == "2026-05-10T20:28:00+09:00"
+
+
+def test_fetch_body_published_at_is_none_when_document_has_no_date(monkeypatch):
+    html = '<div class="entry-content">' + "본문" * 60 + "</div>"
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: _Resp(html))
+    monkeypatch.setitem(fetch._ROBOTS, "blog.example.com", None)
+    monkeypatch.setattr(fetch, "_respect_rate_limit", lambda host: None)
+
+    result = fetch.fetch_body("https://blog.example.com/entry/festival")
+
+    assert result.status == "ok"
+    assert result.published_at is None

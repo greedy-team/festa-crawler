@@ -156,3 +156,58 @@ def test_call_claude_passes_tools_flag(monkeypatch):
 
     extract.call_claude("프롬프트", tools="WebSearch")
     assert captured["argv"][-2:] == ["--tools", "WebSearch"]
+
+
+def test_extraction_result_accepts_missing_year():
+    # 본문에 연도가 없으면 LLM이 비운다. 스키마가 그것을 받아야 verify가 판단할 수 있다.
+    result = ExtractionResult.model_validate_json(
+        '{"found": true, "university_name": "연세대학교"}'
+    )
+    assert result.year is None
+
+
+def test_verify_passes_when_year_unknown():
+    # 연도를 적지 않는 글이 흔하다. 조이면 사람이 채울 원재료까지 사라진다 (DEC-0138)
+    assert verify(_result(year=None), "연세대학교", 2026) is True
+
+
+def test_date_warning_flags_year_gap():
+    past = extract.date_warning("2023-05-11T20:30:25+09:00", 2025)
+    future = extract.date_warning("2026-09-01T10:29:20+09:00", 2025)
+    assert past is not None and "2023" in past
+    assert future is not None and "2026" in future
+
+
+def test_date_warning_silent_when_year_matches():
+    assert extract.date_warning("2026-05-10T20:28:00+09:00", 2026) is None
+    assert extract.date_warning("2026. 5. 10. 20:28", 2026) is None      # 네이버 표기
+
+
+def test_date_warning_silent_when_year_unknown():
+    assert extract.date_warning(None, 2026) is None
+    assert extract.date_warning("등록일 없음", 2026) is None
+
+
+def _prompt(**overrides) -> str:
+    args = {"university": "연세대학교", "year": 2026,
+            "body": "본문", "candidates": "(후보 없음)"}
+    args.update(overrides)
+    return extract.PROMPT_TEMPLATE.format(**args)
+
+
+def test_prompt_has_rules_for_year_and_university_name():
+    # 규칙이 없으면 모델이 프롬프트에 적힌 값을 그대로 되돌려주고 verify가 그것을 확인한다
+    prompt = _prompt()
+    assert "- year:" in prompt
+    assert "- university_name:" in prompt
+
+
+def test_prompt_tells_model_to_leave_year_null_when_absent():
+    year_rule = _prompt().split("- year:")[1].split("\n- ")[0]
+    assert "null" in year_rule
+
+
+def test_prompt_excludes_student_stages_and_hosts_from_lineup():
+    prompt = _prompt()
+    assert "학생 무대" in prompt
+    assert "MC" in prompt

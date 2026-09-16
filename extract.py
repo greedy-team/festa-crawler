@@ -3,6 +3,7 @@
 API 전환 시 call_claude() 내부만 Anthropic SDK 호출로 교체한다 (시그니처 불변).
 """
 import json
+import re
 import subprocess
 
 from pydantic import ValidationError
@@ -17,6 +18,10 @@ PROMPT_TEMPLATE = """다음은 '{university}'의 {year}년 축제 관련 블로�
 규칙:
 - 본문에 명시되지 않은 값은 반드시 null로 둡니다. 절대 추측하거나 지어내지 마세요.
 - found: 이 글이 실제로 '{university}'의 {year}년 축제 라인업/정보 글이면 true, 아니면 false.
+- university_name: 본문에 적힌 주최 대학 이름을 씁니다. 위에 알려준 이름을 그대로
+  옮겨 적지 마세요. 본문이 대학을 밝히지 않으면 빈 문자열로 둡니다.
+- year: 본문에 적힌 축제 개최 연도를 정수로 씁니다. 본문에 연도 표기가 없으면 null입니다.
+  위에 알려준 연도는 found를 판단하는 데만 쓰고, 이 필드에 옮겨 적지 마세요.
 - festival_name: 축제 이름만 씁니다. 대학명(주최명)은 포함하지 않습니다 (예: "아카라카").
 - start_date / end_date: 축제 기간입니다. 하루만 열리는 축제로 읽히면 end_date를
   start_date와 같은 날짜로 씁니다 (예: "5월 22일 개최" → 둘 다 2026-05-22).
@@ -31,6 +36,10 @@ PROMPT_TEMPLATE = """다음은 '{university}'의 {year}년 축제 관련 블로�
 - ticket_open_at: 예매 오픈 일시가 명시된 경우만 YYYY-MM-DDTHH:mm:ss 형식. 아니면 null.
 - admission_raw: 위 입장·티켓 판단의 근거가 된 본문 문장을 그대로 인용합니다
   (요약·수정 금지). 근거 없으면 null.
+- 라인업에는 외부에서 초청된 아티스트만 넣습니다. 주최 대학 소속 학생 공연(중앙동아리·
+  학과·학부 공연, 밴드·댄스 동아리, 응원단)과 행사 진행 역할(MC·사회자), 축사·내빈은
+  제외합니다. '학생 무대 : ...' 처럼 학생 공연으로 묶여 제시된 줄은 통째로 제외합니다.
+  소속을 판단할 수 없으면 포함합니다.
 - artist_raw: 본문에 적힌 표기 그대로 씁니다 (정규화 금지).
 - day: 그 출연자가 서는 일차를 1부터 시작하는 정수로 씁니다. 본문의 일차 표기나
   날짜와 축제 시작일로 판단하고, 판단할 수 없으면 null.
@@ -126,8 +135,16 @@ def extract(
     raise ExtractError(f"추출 검증 2회 실패: {last_error}")
 
 
+_YEAR_IN_TEXT = re.compile(r"(20\d\d)")
+
+
 def verify(result: ExtractionResult, university: str, year: int) -> bool:
-    """역방향 검증: 추출 결과가 요청한 대학·연도의 글이 맞는지 사후 판정."""
+    """역방향 검증: 추출 결과가 요청한 대학·연도의 글이 맞는지 사후 판정.
+
+    연도가 비어 있으면 떨어뜨리지 않는다 — 본문이 연도를 적지 않은 것이지 틀린 것이
+    아니다. 조이면 사람이 채울 원재료까지 사라진다. 그 자리의 보완 신호는
+    date_warning이 낸다.
+    """
     if not result.found:
         return False
     if not result.university_name:
@@ -135,4 +152,22 @@ def verify(result: ExtractionResult, university: str, year: int) -> bool:
     name_match = (
         result.university_name in university or university in result.university_name
     )
-    return name_match and result.year == year
+    year_match = result.year is None or result.year == year
+    return name_match and year_match
+
+
+def date_warning(published_at: str | None, year: int) -> str | None:
+    """출처 문서의 게시 연도가 요청 연도와 다르면 경고 문구, 같거나 모르면 None.
+
+    판정이 아니라 표시다. 게시일은 약한 신호여서 행을 떨어뜨리지 않는다 —
+    해를 넘겨 올라오는 예고글이 있고, 게시일을 밝히지 않는 출처도 있다.
+    """
+    if not published_at:
+        return None
+    match = _YEAR_IN_TEXT.search(published_at)
+    if not match:
+        return None
+    published_year = int(match.group(1))
+    if published_year == year:
+        return None
+    return f"출처 게시 연도 {published_year} != 요청 연도 {year}"
