@@ -219,7 +219,9 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
         if not _try_candidates(
             discover_sitemap(row.university, row.year), row, record, "sitemap"
         ):
-            candidates = discover_cached(row.university, row.year, out_dir)
+            candidates = discover_cached(
+                row.university, row.year, out_dir, row.season
+            )
             if candidates is None:
                 # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
                 return _keep_stale_on_failure(record, stale_ok, row)

@@ -41,7 +41,7 @@ def _extraction() -> ExtractionResult:
 
 
 def test_process_row_no_url(tmp_path, monkeypatch):
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_candidate"
     assert record["extraction"] is None
@@ -80,7 +80,7 @@ def test_process_row_mismatch_flag(tmp_path, monkeypatch):
     wrong = _extraction().model_copy(update={"year": 2024})
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
     monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: wrong)
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])   # 수동 URL 실패 후 탐색 폴백, 후보 없음
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])   # 수동 URL 실패 후 탐색 폴백, 후보 없음
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "mismatch"       # 수동 시도의 실패 flag 유지
     assert record["extraction"] is not None   # 결과는 보존, 판단은 사람이
@@ -226,14 +226,14 @@ def test_write_csv_utf8_bom(tmp_path):
 
 def test_process_row_no_candidate_is_cached(tmp_path, monkeypatch):
     # 정당한 0건(탐색은 됐지만 후보가 없음)은 캐시해도 된다 — 재검색은 discovered/ 캐시가 막는다
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_candidate"
     assert (tmp_path / "raw" / "연세대학교.json").exists()
 
 
 def test_process_row_transient_discovery_failure_not_cached(tmp_path, monkeypatch):
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: None)
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: None)
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_source"      # 탐색을 못 했으므로 no_candidate가 아니다
     assert not (tmp_path / "raw" / "연세대학교.json").exists()   # 캐시 안 함 → 다음 실행에서 재시도
@@ -271,7 +271,7 @@ def test_write_csv_keeps_old_file_when_replace_fails(tmp_path, monkeypatch):
 def test_process_row_fetch_failed_not_cached(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "fetch_body",
                         lambda url: FetchResult(status="fetch_failed", error="timeout"))
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])   # 수동 URL 실패 후 탐색 폴백, 후보 없음
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])   # 수동 URL 실패 후 탐색 폴백, 후보 없음
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "fetch_failed"   # 수동 시도의 실패 flag 유지
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
@@ -284,7 +284,7 @@ def test_process_row_extract_failed_not_cached(tmp_path, monkeypatch):
         raise ExtractError("세션 한도")
 
     monkeypatch.setattr(crawl, "extract", boom)
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "extract_failed"
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
@@ -344,7 +344,7 @@ def test_process_row_manual_success_skips_discovery(tmp_path, monkeypatch):
 
 def test_process_row_discovers_when_no_url(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "discover_cached",
-                        lambda u, y, o: ["https://found.example.com/post"])
+                        lambda u, y, o, season=None: ["https://found.example.com/post"])
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
     monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
     record = process_row(_row(url=None), tmp_path)
@@ -355,7 +355,7 @@ def test_process_row_discovers_when_no_url(tmp_path, monkeypatch):
 
 def test_process_row_falls_through_to_second_candidate(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "discover_cached",
-                        lambda u, y, o: ["https://bad.example.com/x", "https://good.example.com/y"])
+                        lambda u, y, o, season=None: ["https://bad.example.com/x", "https://good.example.com/y"])
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
 
     def fake_extract(body, u, y, cands=None):
@@ -376,7 +376,7 @@ def test_process_row_falls_through_to_second_candidate(tmp_path, monkeypatch):
 
 
 def test_process_row_no_candidate_when_discovery_empty(tmp_path, monkeypatch):
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_candidate"
     assert record["discovery"] == ""
@@ -385,7 +385,7 @@ def test_process_row_no_candidate_when_discovery_empty(tmp_path, monkeypatch):
 def test_process_row_keeps_manual_failure_flag(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "fetch_body",
                         lambda url: FetchResult(status="empty_body", poster_image_url=None))
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "empty_body"     # no_candidate로 덮어쓰지 않는다
     assert record["discovery"] == ""
@@ -478,7 +478,7 @@ def test_process_row_keeps_old_ok_cache_when_recollect_fails(tmp_path, monkeypat
     (raw_dir / "연세대학교.json").write_text(before, "utf-8")
     monkeypatch.setattr(crawl, "fetch_body",
                         lambda url: FetchResult(status="fetch_failed", error="410"))
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "ok"                             # 구 데이터 유지
     assert record["extraction"] is not None
@@ -498,7 +498,7 @@ def test_process_row_keeps_old_ok_cache_on_transient_discovery_failure(tmp_path,
     (raw_dir / "연세대학교.json").write_text(before, "utf-8")
     monkeypatch.setattr(crawl, "fetch_body",
                         lambda url: FetchResult(status="fetch_failed", error="410"))
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: None)   # 탐색 자체 실패(조기 반환 경로)
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: None)   # 탐색 자체 실패(조기 반환 경로)
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "ok"                             # 구 데이터 유지
     assert record["extraction"] is not None
@@ -519,7 +519,7 @@ def test_process_row_keeps_old_ok_cache_on_mismatch(tmp_path, monkeypatch):
     wrong = _extraction().model_copy(update={"year": 2024})
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
     monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: wrong)
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(), tmp_path)
     assert record["flag"] == "ok"                             # mismatch가 구 데이터를 덮지 않는다
     assert record["extraction"] is not None
@@ -539,7 +539,7 @@ def test_process_row_no_fallback_when_seed_url_changed(tmp_path, monkeypatch):
     (raw_dir / "연세대학교.json").write_text(json.dumps(old), "utf-8")
     monkeypatch.setattr(crawl, "fetch_body",
                         lambda url: FetchResult(status="fetch_failed", error="404"))
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(), tmp_path)   # _row()의 url은 캐시의 seed_url과 다르다
     assert record["flag"] == "fetch_failed"   # 폴백 없이 실패 flag 그대로
 
@@ -630,7 +630,7 @@ def test_process_row_prefers_sitemap_and_skips_websearch(tmp_path, monkeypatch):
 def test_process_row_falls_back_to_websearch_when_sitemap_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
     monkeypatch.setattr(crawl, "discover_cached",
-                        lambda u, y, o: ["https://found.example.com/post"])
+                        lambda u, y, o, season=None: ["https://found.example.com/post"])
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
     monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
     record = process_row(_row(url=None), tmp_path)
@@ -640,7 +640,7 @@ def test_process_row_falls_back_to_websearch_when_sitemap_empty(tmp_path, monkey
 
 def test_process_row_falls_back_when_sitemap_candidates_all_fail(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: ["https://bad.example.com/x"])
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: ["https://good.example.com/y"])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: ["https://good.example.com/y"])
     monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(status="ok", body="본문" * 100))
     monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
 
@@ -659,7 +659,7 @@ def test_process_row_falls_back_when_sitemap_candidates_all_fail(tmp_path, monke
 
 def test_process_row_no_candidate_when_both_sources_empty(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_candidate"
     assert record["discovery"] == ""
@@ -667,7 +667,7 @@ def test_process_row_no_candidate_when_both_sources_empty(tmp_path, monkeypatch)
 
 def test_process_row_transient_discovery_failure_after_sitemap_miss(tmp_path, monkeypatch):
     monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: None)
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: None)
     record = process_row(_row(url=None), tmp_path)
     assert record["flag"] == "no_source"
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
@@ -694,7 +694,7 @@ def test_run_writes_into_year_folder(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     _write_seed(tmp_path, 2026, [_seed_row()])
     monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     base = tmp_path / "output"
 
     crawl.run(2026, base)
@@ -730,7 +730,7 @@ def test_run_does_not_touch_other_year(tmp_path, monkeypatch):
     (other / "festivals.csv").write_text("건드리지 마시오", encoding="utf-8")
     _write_seed(tmp_path, 2026, [_seed_row()])
     monkeypatch.setattr(crawl, "discover_sitemap", lambda u, y: [])
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
 
     crawl.run(2026, base)
 
@@ -812,7 +812,7 @@ def test_run_aborts_on_old_flat_output(tmp_path, monkeypatch):
     """연도 폴더 없는 예전 레이아웃 — 그냥 두면 29곳을 조용히 다시 수집한다."""
     monkeypatch.chdir(tmp_path)
     _write_seed(tmp_path, 2026, [_seed_row()])
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     base = tmp_path / "output"
     (base / "raw").mkdir(parents=True)
     (base / "festivals.csv").write_text("예전 레이아웃", encoding="utf-8")
@@ -827,7 +827,7 @@ def test_run_guard_ignores_fresh_clone_and_year_layout(tmp_path, monkeypatch):
     """가드는 옛 평면 레이아웃에만 걸린다 — output/이 없어도, 이미 옮겼어도 그냥 돈다."""
     monkeypatch.chdir(tmp_path)
     _write_seed(tmp_path, 2026, [_seed_row()])
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     base = tmp_path / "output"
 
     crawl.run(2026, base)      # output/ 자체가 없는 새 클론
@@ -905,7 +905,7 @@ def test_process_row_has_no_date_warning_when_years_agree(tmp_path, monkeypatch)
 
 
 def test_process_row_without_source_has_date_fields(tmp_path, monkeypatch):
-    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o: [])
+    monkeypatch.setattr(crawl, "discover_cached", lambda u, y, o, season=None: [])
     record = process_row(_row(url=None), tmp_path)
     assert record["published_at"] is None
     assert record["date_warning"] is None
