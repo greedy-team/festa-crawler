@@ -26,6 +26,8 @@ BLOCKED_DOMAINS = frozenset({
     "youtube.com", "youtu.be",   # 영상이라 추출할 본문이 없다
 })
 
+SEASON_KO = {"spring": " 봄", "fall": " 가을"}
+
 # 이미 출처로 쓰고 있는 블로그들의 사이트맵. robots.txt가 /search는 막지만 sitemap.xml은 막지 않는다.
 SITEMAP_SOURCES = (
     "https://memogipost.tistory.com/sitemap.xml",
@@ -38,12 +40,12 @@ SITEMAP_SOURCES = (
 _LOC = re.compile(r"<loc>(.*?)</loc>", re.DOTALL)
 _sitemap_urls: list[str] | None = None      # 프로세스 1회 로드 (디스크 캐시 아님)
 
-PROMPT_TEMPLATE = """'{university}'의 {year}년 대학 축제 라인업을 다룬 웹 문서를 검색해서,
+PROMPT_TEMPLATE = """'{university}'의 {year}년{season} 대학 축제 라인업을 다룬 웹 문서를 검색해서,
 실제로 접근 가능한 URL만 골라 JSON으로 알려주세요.
 
 규칙:
 - 웹 검색 결과에 실제로 나온 URL만 씁니다. 절대 URL을 지어내지 마세요.
-- '{university}'의 {year}년 축제를 다룬 문서만 고릅니다. 다른 대학이나 다른 연도는 제외합니다.
+- '{university}'의 {year}년{season} 축제를 다룬 문서만 고릅니다. 다른 대학이나 다른 연도는 제외합니다.
 - 라인업·출연 가수·축제 일정을 다루는 문서를 우선합니다.
 - 인스타그램·유튜브는 본문 텍스트를 읽을 수 없으므로 제외하고, 글로 된 문서만 고릅니다.
 - 관련성이 높은 순서로 최대 8개까지.
@@ -95,9 +97,11 @@ def discover_sitemap(university: str, year: int) -> list[str]:
     ]
 
 
-def discover(university: str, year: int) -> list[str]:
+def discover(university: str, year: int, season: str | None = None) -> list[str]:
     """검색으로 후보 URL을 찾는다. 차단 도메인은 제외하고 등장순으로 반환."""
-    prompt = PROMPT_TEMPLATE.format(university=university, year=year)
+    prompt = PROMPT_TEMPLATE.format(
+        university=university, year=year, season=SEASON_KO.get(season, "")
+    )
     raw = call_claude(prompt, timeout=DISCOVER_TIMEOUT_SECONDS, tools="WebSearch")
     try:
         result = DiscoverResult.model_validate_json(_extract_json(raw))
@@ -106,21 +110,24 @@ def discover(university: str, year: int) -> list[str]:
     return [c.url for c in result.candidates if not _is_blocked(c.url)]
 
 
-def discover_cached(university: str, year: int, out_dir: Path) -> list[str] | None:
+def discover_cached(
+    university: str, year: int, out_dir: Path, season: str | None = None
+) -> list[str] | None:
     """탐색 결과 캐시 래퍼. 탐색 1건이 60초 이상 걸려 캐시가 필수다.
 
     반환값: 후보 목록(정당한 0건이면 빈 리스트), 탐색 자체가 실패했으면 None.
     None은 "이 결과를 캐시하지 말고 다음 실행에서 다시 시도하라"는 신호다.
     """
     cache_dir = out_dir / "discovered"
-    cache_path = cache_dir / f"{university}.json"
+    slug = university if season is None else f"{university}-{season}"
+    cache_path = cache_dir / f"{slug}.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         if cached.get("year") == year:
             return list(cached.get("candidates", []))
 
     try:
-        urls = discover(university, year)
+        urls = discover(university, year, season)
     except ExtractError as e:
         print(f"  탐색 실패: {e}", flush=True)
         return None
@@ -128,7 +135,8 @@ def discover_cached(university: str, year: int, out_dir: Path) -> list[str] | No
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(
         json.dumps(
-            {"university": university, "year": year, "candidates": urls},
+            {"university": university, "year": year, "season": season,
+             "candidates": urls},
             ensure_ascii=False, indent=2,
         ),
         encoding="utf-8",

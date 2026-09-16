@@ -64,9 +64,11 @@ def _never(argv):
 
 def _seed(tmp_path):
     path = tmp_path / "universities.csv"
-    _write(path, ["university", "campus", "region", "year", "url"],
+    _write(path, ["university", "campus", "region", "year", "url",
+                  "latitude", "longitude"],
            [{"university": "연세대학교", "campus": "신촌캠퍼스",
-             "region": "서울 서대문구", "year": "2026", "url": ""}])
+             "region": "서울 서대문구", "year": "2026", "url": "",
+             "latitude": "37.5665", "longitude": "126.9780"}])
     return path
 
 
@@ -231,3 +233,51 @@ def test_run_enrich_gets_no_year(tmp_path):
         {"job": "enrich"}, tmp_path, set(), start=start, year=2027)
     assert status == 200
     assert started == [["enrich.py"]]
+
+
+def _seed_with_season(tmp_path, rows):
+    seed = tmp_path / "universities-2026.csv"
+    seed.write_text(
+        "university,campus,region,year,url,latitude,longitude,season\n"
+        + "\n".join(rows) + "\n",
+        encoding="utf-8-sig",
+    )
+    return seed
+
+
+def test_slug_map_keys_by_import_key_prefix(tmp_path):
+    seed = _seed_with_season(tmp_path, [
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,spring",
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,fall",
+    ])
+    mapping = serve.load_slug_map(seed)
+    assert mapping["고려대학교-서울캠퍼스-2026"] == "고려대학교-spring"
+
+
+def test_allowed_list_is_slugs(tmp_path):
+    seed = _seed_with_season(tmp_path, [
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,spring",
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,fall",
+    ])
+    assert serve.load_allowed_universities(seed) == {"고려대학교-spring", "고려대학교-fall"}
+
+
+def test_clear_cache_uses_slug(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "고려대학교-fall.json").write_text("{}", encoding="utf-8")
+    (raw / "고려대학교-spring.json").write_text("{}", encoding="utf-8")
+    serve.clear_cache(tmp_path, "고려대학교-fall", rediscover=False)
+    assert not (raw / "고려대학교-fall.json").exists()
+    assert (raw / "고려대학교-spring.json").exists()
+
+
+def test_load_data_attaches_cache_slug(tmp_path):
+    seed = _seed_with_season(tmp_path, [
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,fall",
+    ])
+    out = tmp_path / "2026"
+    _write(out / "festivals.csv", ["import_key", "host_name"],
+           [{"import_key": "고려대학교-서울캠퍼스-2026-09", "host_name": "고려대학교"}])
+    data = serve.load_data(out, tmp_path, serve.load_slug_map(seed))
+    assert data["festivals"][0]["cache_slug"] == "고려대학교-fall"

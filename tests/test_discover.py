@@ -230,3 +230,29 @@ def test_discover_sitemap_malformed_xml_does_not_raise(monkeypatch):
     monkeypatch.setattr(discover, "SITEMAP_SOURCES", ("https://blog.example.com/sitemap.xml",))
     monkeypatch.setattr(discover, "fetch_text", lambda url: "<urlset><loc>잘린")
     assert discover.discover_sitemap("고려대학교", 2026) == []
+
+
+def test_prompt_carries_season_when_declared(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        discover, "call_claude",
+        lambda p, timeout=300, tools="": captured.append(p) or '{"candidates": []}')
+    discover.discover("고려대학교", 2026, season="fall")
+    assert "가을" in captured[0]
+
+
+def test_prompt_unchanged_without_season(monkeypatch):
+    captured = []
+    monkeypatch.setattr(
+        discover, "call_claude",
+        lambda p, timeout=300, tools="": captured.append(p) or '{"candidates": []}')
+    discover.discover("고려대학교", 2026)
+    assert "가을" not in captured[0] and "봄" not in captured[0]
+
+
+def test_candidate_cache_separates_by_season(tmp_path, monkeypatch):
+    monkeypatch.setattr(discover, "discover",
+                        lambda u, y, season=None: ["https://example.com/x"])
+    discover.discover_cached("고려대학교", 2026, tmp_path, season="fall")
+    assert (tmp_path / "discovered" / "고려대학교-fall.json").exists()
+    assert not (tmp_path / "discovered" / "고려대학교.json").exists()

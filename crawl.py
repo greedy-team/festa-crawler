@@ -12,6 +12,9 @@ from extract import ExtractError, date_warning, extract, verify
 from fetch import fetch_body
 
 
+SEASONS = ("spring", "fall")
+
+
 @dataclass
 class UniversityRow:
     university: str
@@ -21,11 +24,13 @@ class UniversityRow:
     url: str | None
     latitude: str
     longitude: str
+    season: str | None = None
 
 
 def load_universities(path: Path) -> list[UniversityRow]:
     rows: list[UniversityRow] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str, str | None]] = set()
+    declared: dict[str, bool] = {}
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         missing = [c for c in ("latitude", "longitude")
@@ -40,21 +45,32 @@ def load_universities(path: Path) -> list[UniversityRow]:
             )
         for r in reader:
             university = r["university"].strip()
-            if university in seen:
-                # 캐시가 대학 이름으로만 갈린다 (raw/{university}.json,
-                # discovered/{university}.json). 두 캠퍼스가 탐색 후보 캐시를 공유하고
-                # verify()는 캠퍼스를 구분하지 못해 같은 축제가 두 키로 두 번 나간다.
+            season = (r.get("season") or "").strip() or None
+            if season is not None and season not in SEASONS:
                 raise SystemExit(
-                    f"{path} 에 '{university}' 행이 둘 이상입니다 — 캐시가 대학 이름으로만\n"
-                    "갈려 두 캠퍼스가 같은 수집 결과를 받습니다. 다캠퍼스 지원은 캐시 키를\n"
-                    "캠퍼스 단위로 바꾸는 작업이 선행되어야 합니다."
+                    f"{path} 의 '{university}' 행에 알 수 없는 season 값 {season!r} 이 있습니다.\n"
+                    f"쓸 수 있는 값은 {', '.join(SEASONS)} 입니다."
                 )
-            seen.add(university)
+            campus = r["campus"].strip()
+            if university in declared and declared[university] != (season is not None):
+                # 선언하지 않은 행은 계절 제약이 없어 다른 계절의 글까지 가져간다.
+                raise SystemExit(
+                    f"{path} 의 '{university}' 행 일부만 season 을 선언했습니다.\n"
+                    "한 대학의 행 중 하나라도 선언하면 그 대학의 모든 행이 선언해야 합니다."
+                )
+            declared[university] = season is not None
+            key = (university, campus, season)
+            if key in seen:
+                raise SystemExit(
+                    f"{path} 에 '{university}' / '{campus}' / season={season} 행이 둘 이상입니다.\n"
+                    "대학·캠퍼스·계절이 같은 행은 같은 축제를 가리킵니다."
+                )
+            seen.add(key)
             url = (r.get("url") or "").strip()
             rows.append(
                 UniversityRow(
                     university=university,
-                    campus=r["campus"].strip(),
+                    campus=campus,
                     region=r["region"].strip(),
                     year=int(r["year"]),
                     url=url or None,
@@ -62,6 +78,7 @@ def load_universities(path: Path) -> list[UniversityRow]:
                     # 검증은 백엔드 임포트 한 곳이다 (같은 규칙을 두 곳에 적지 않는다).
                     latitude=(r.get("latitude") or "").strip(),
                     longitude=(r.get("longitude") or "").strip(),
+                    season=season,
                 )
             )
     return rows
@@ -123,7 +140,9 @@ def _attempt_url(url: str, row: UniversityRow) -> dict:
         attempt["flag"] = "extract_failed"
         return attempt
     attempt["extraction"] = result.model_dump()
-    attempt["flag"] = "ok" if verify(result, row.university, row.year) else "mismatch"
+    attempt["flag"] = (
+        "ok" if verify(result, row.university, row.year, row.season) else "mismatch"
+    )
     return attempt
 
 
@@ -145,11 +164,22 @@ def _try_candidates(
     return False
 
 
+def cache_slug(row: UniversityRow) -> str:
+    """수집·탐색 캐시의 파일 이름.
+
+    season 이 없으면 대학 이름 그대로다 — 기존 캐시를 무효화하지 않기 위해서다.
+    선언한 행만 계절 단위로 갈린다.
+    """
+    if row.season is None:
+        return row.university
+    return f"{row.university}-{row.season}"
+
+
 def process_row(row: UniversityRow, out_dir: Path) -> dict:
     """대학 1곳 처리. 수동 URL → 사이트맵 후보 → 검색 후보 순으로 시도한다."""
     raw_dir = out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = raw_dir / f"{row.university}.json"
+    cache_path = raw_dir / f"{cache_slug(row)}.json"
     stale_ok = None
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -189,7 +219,9 @@ def process_row(row: UniversityRow, out_dir: Path) -> dict:
         if not _try_candidates(
             discover_sitemap(row.university, row.year), row, record, "sitemap"
         ):
-            candidates = discover_cached(row.university, row.year, out_dir)
+            candidates = discover_cached(
+                row.university, row.year, out_dir, row.season
+            )
             if candidates is None:
                 # 탐색 자체가 실패(세션 한도 등) — 일시적이므로 캐시하지 않고 다음 실행에서 재시도
                 return _keep_stale_on_failure(record, stale_ok, row)

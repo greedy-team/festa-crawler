@@ -138,12 +138,36 @@ def extract(
 _YEAR_IN_TEXT = re.compile(r"(20\d\d)")
 
 
-def verify(result: ExtractionResult, university: str, year: int) -> bool:
+# 계절별 개최 월 범위. 실측에서 가을 축제가 9·10월에 걸쳐 있어 11월까지 잡는다.
+SEASON_MONTHS = {"spring": (3, 6), "fall": (9, 11)}
+
+
+def season_match(start_date: str | None, season: str | None) -> bool:
+    """선언한 계절과 추출된 시작일의 월이 맞는지.
+
+    판정할 수 없으면 통과시킨다 — season 이 없으면 제약이 없고, 날짜가 없으면
+    모르는 것을 틀렸다고 하지 않는다. 조이면 사람이 채울 원재료까지 사라진다.
+    """
+    if season is None or not start_date:
+        return True
+    try:
+        month = int(start_date[5:7])
+    except ValueError:
+        return True
+    low, high = SEASON_MONTHS[season]
+    return low <= month <= high
+
+
+def verify(
+    result: ExtractionResult, university: str, year: int, season: str | None = None
+) -> bool:
     """역방향 검증: 추출 결과가 요청한 대학·연도의 글이 맞는지 사후 판정.
 
     연도가 비어 있으면 떨어뜨리지 않는다 — 본문이 연도를 적지 않은 것이지 틀린 것이
     아니다. 조이면 사람이 채울 원재료까지 사라진다. 그 자리의 보완 신호는
     date_warning이 낸다.
+
+    season 이 주어지면 추출된 시작일의 월이 그 계절에 드는지도 본다.
     """
     if not result.found:
         return False
@@ -153,7 +177,7 @@ def verify(result: ExtractionResult, university: str, year: int) -> bool:
         result.university_name in university or university in result.university_name
     )
     year_match = result.year is None or result.year == year
-    return name_match and year_match
+    return name_match and year_match and season_match(result.start_date, season)
 
 
 def date_warning(published_at: str | None, year: int) -> str | None:

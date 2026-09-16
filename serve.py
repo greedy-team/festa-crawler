@@ -12,6 +12,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from crawl import cache_slug, load_universities
+
 
 class CsvUnreadable(Exception):
     """crawl이 CSV를 쓰는 도중이라 읽지 못했다. 다음 폴링에서 다시 읽는다."""
@@ -28,10 +30,20 @@ def read_csv(path: Path) -> list[dict]:
         raise CsvUnreadable(f"{path.name}: {e}")
 
 
-def load_data(out_dir: Path, base_dir: Path) -> dict:
-    """artists.csv는 연도 공통이라 out_dir(연도 폴더)이 아니라 base_dir(output/)에서 읽는다."""
+def load_data(
+    out_dir: Path, base_dir: Path, slug_map: dict[str, str] | None = None
+) -> dict:
+    """artists.csv는 연도 공통이라 out_dir(연도 폴더)이 아니라 base_dir(output/)에서 읽는다.
+
+    축제 행에 cache_slug 를 붙인다 — 축제가 둘인 대학은 host_name 이 같아 화면이
+    어느 행인지 말할 수 없다. 재실행 요청은 이 값으로 행을 주소한다.
+    """
+    festivals = read_csv(out_dir / "festivals.csv")
+    for row in festivals:
+        prefix = (row.get("import_key") or "").rsplit("-", 1)[0]
+        row["cache_slug"] = (slug_map or {}).get(prefix, row.get("host_name", ""))
     return {
-        "festivals": read_csv(out_dir / "festivals.csv"),
+        "festivals": festivals,
         "lineup": read_csv(out_dir / "lineup.csv"),
         "artists": read_csv(base_dir / "artists.csv"),
     }
@@ -92,15 +104,22 @@ JOB = Job()
 
 def load_allowed_universities(seed_path: Path) -> set[str]:
     """허용 목록. 임의 문자열이 파일 경로로 들어가는 것을 막는 유일한 방어선이다."""
-    with open(seed_path, newline="", encoding="utf-8-sig") as f:
-        return {r["university"].strip() for r in csv.DictReader(f)}
+    return {cache_slug(r) for r in load_universities(seed_path)}
 
 
-def clear_cache(out_dir: Path, university: str, rediscover: bool) -> None:
+def load_slug_map(seed_path: Path) -> dict[str, str]:
+    """import_key 접두사({주최}-{캠퍼스}-{연도}) -> 캐시 slug. 화면이 행을 주소하는 데 쓴다."""
+    mapping: dict[str, str] = {}
+    for r in load_universities(seed_path):
+        mapping.setdefault(f"{r.university}-{r.campus}-{r.year}", cache_slug(r))
+    return mapping
+
+
+def clear_cache(out_dir: Path, slug: str, rediscover: bool) -> None:
     """행 단위 재실행을 위해 캐시를 지운다. 없어도 통과한다 — 버튼을 두 번 눌러도 무해해야 한다."""
-    (out_dir / "raw" / f"{university}.json").unlink(missing_ok=True)
+    (out_dir / "raw" / f"{slug}.json").unlink(missing_ok=True)
     if rediscover:
-        (out_dir / "discovered" / f"{university}.json").unlink(missing_ok=True)
+        (out_dir / "discovered" / f"{slug}.json").unlink(missing_ok=True)
 
 
 def handle_run(payload: dict, out_dir: Path, allowed: set[str], start,
@@ -150,6 +169,7 @@ ROOT = Path(__file__).resolve().parent
 OUT_DIR = ROOT / "output"
 BASE_DIR = ROOT / "output"
 ALLOWED: set[str] = set()
+SLUG_MAP: dict[str, str] = {}
 YEAR = 0
 
 
@@ -172,7 +192,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, html, "text/html; charset=utf-8")
         if path == "/api/data":
             try:
-                return self._json(200, load_data(OUT_DIR, BASE_DIR))
+                return self._json(200, load_data(OUT_DIR, BASE_DIR, SLUG_MAP))
             except CsvUnreadable as e:
                 return self._json(503, {"error": str(e)})
         if path == "/api/log":
@@ -212,7 +232,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    global ALLOWED, OUT_DIR, BASE_DIR, YEAR
+    global ALLOWED, SLUG_MAP, OUT_DIR, BASE_DIR, YEAR
     parser = argparse.ArgumentParser(description="FESTA 검수 페이지 (로컬 전용)")
     parser.add_argument("--year", type=int, required=True, help="검수할 연도")
     parser.add_argument("--port", type=int, default=8765)
@@ -225,6 +245,7 @@ def main() -> None:
     BASE_DIR = ROOT / "output"
     OUT_DIR = BASE_DIR / str(args.year)
     ALLOWED = load_allowed_universities(seed)
+    SLUG_MAP = load_slug_map(seed)
 
     # 소켓을 먼저 열고 나서 브라우저를 연다 — 반대 순서면 두 번째 실행이 첫 번째 인스턴스의
     # 탭을 열어놓고서 "Address already in use"로 죽는다.
