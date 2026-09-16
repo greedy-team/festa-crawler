@@ -162,11 +162,22 @@ def _try_candidates(
     return False
 
 
+def cache_slug(row: UniversityRow) -> str:
+    """수집·탐색 캐시의 파일 이름.
+
+    season 이 없으면 대학 이름 그대로다 — 기존 캐시를 무효화하지 않기 위해서다.
+    선언한 행만 계절 단위로 갈린다.
+    """
+    if row.season is None:
+        return row.university
+    return f"{row.university}-{row.season}"
+
+
 def process_row(row: UniversityRow, out_dir: Path) -> dict:
     """대학 1곳 처리. 수동 URL → 사이트맵 후보 → 검색 후보 순으로 시도한다."""
     raw_dir = out_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = raw_dir / f"{row.university}.json"
+    cache_path = raw_dir / f"{cache_slug(row)}.json"
     stale_ok = None
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))

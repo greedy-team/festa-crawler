@@ -909,3 +909,21 @@ def test_process_row_without_source_has_date_fields(tmp_path, monkeypatch):
     record = process_row(_row(url=None), tmp_path)
     assert record["published_at"] is None
     assert record["date_warning"] is None
+
+
+def test_cache_slug_without_season_keeps_existing_path():
+    # 기존 캐시를 무효화하지 않는다는 불변식
+    assert crawl.cache_slug(_row()) == "연세대학교"
+
+
+def test_cache_slug_with_season_separates():
+    assert crawl.cache_slug(_row(season="fall")) == "연세대학교-fall"
+
+
+def test_process_row_writes_season_scoped_cache(tmp_path, monkeypatch):
+    monkeypatch.setattr(crawl, "fetch_body", lambda url: FetchResult(
+        status="ok", body="본문" * 100))
+    monkeypatch.setattr(crawl, "extract", lambda body, u, y, cands=None: _extraction())
+    process_row(_row(season="spring"), tmp_path)
+    assert (tmp_path / "raw" / "연세대학교-spring.json").exists()
+    assert not (tmp_path / "raw" / "연세대학교.json").exists()
