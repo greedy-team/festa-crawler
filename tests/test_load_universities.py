@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -8,10 +9,20 @@ CSV_PATH = Path(__file__).parent.parent / "universities-2026.csv"
 
 
 def test_loads_real_seed():
-    # 서울대는 봄·가을 두 행이라 행 수(30)와 대학 수(29)가 다르다
+    """실제 시드가 규칙을 지키는지 본다.
+
+    행 수를 하드코딩하지 않는다 — 가을 행을 더할 때마다 깨지기 때문이다.
+    대신 「행이 둘 이상인 대학은 전부 season 을 선언한다」는 불변식을 확인한다.
+    """
     rows = load_universities(CSV_PATH)
-    assert len(rows) == 30
-    assert len({r.university for r in rows}) == 29
+    universities = {r.university for r in rows}
+    assert len(universities) == 29
+    assert len(rows) >= len(universities)
+
+    per_university = Counter(r.university for r in rows)
+    for r in rows:
+        if per_university[r.university] > 1:
+            assert r.season is not None, f"{r.university} 행이 여럿인데 season 이 없다"
 
 
 def test_url_empty_becomes_none():
