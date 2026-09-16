@@ -55,11 +55,58 @@ def test_missing_coordinate_columns_stops(tmp_path):
     assert "latitude" in str(e.value) and "longitude" in str(e.value)
 
 
-def test_duplicate_university_stops(tmp_path):
+SEASON_HEADER = "university,campus,region,year,url,latitude,longitude,season"
+
+
+def test_duplicate_university_allowed_when_campus_differs(tmp_path):
     path = _seed(tmp_path, [
         "성균관대학교,인문사회과학캠퍼스,서울 종로구,2026,,37.5,126.9",
         "성균관대학교,자연과학캠퍼스,경기 수원시,2026,,37.2,126.9",
     ])
+    assert len(load_universities(path)) == 2
+
+
+def test_identical_row_stops(tmp_path):
+    path = _seed(tmp_path, [
+        "성균관대학교,인문사회과학캠퍼스,서울 종로구,2026,,37.5,126.9",
+        "성균관대학교,인문사회과학캠퍼스,서울 종로구,2026,,37.5,126.9",
+    ])
     with pytest.raises(SystemExit) as e:
         load_universities(path)
     assert "성균관대학교" in str(e.value)
+
+
+def test_same_university_allowed_when_seasons_differ(tmp_path):
+    path = _seed(tmp_path, [
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,spring",
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,fall",
+    ], header=SEASON_HEADER)
+    rows = load_universities(path)
+    assert [r.season for r in rows] == ["spring", "fall"]
+
+
+def test_partially_declared_season_stops(tmp_path):
+    # 비어 있는 행은 계절 제약이 없어 다른 계절 글까지 가져간다
+    path = _seed(tmp_path, [
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,",
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,fall",
+    ], header=SEASON_HEADER)
+    with pytest.raises(SystemExit) as e:
+        load_universities(path)
+    assert "고려대학교" in str(e.value)
+    assert "일부만" in str(e.value)      # 중복 가드가 아니라 선언 일관성 규칙이 잡아야 한다
+
+
+def test_unknown_season_value_stops(tmp_path):
+    path = _seed(tmp_path, [
+        "고려대학교,서울캠퍼스,서울 성북구,2026,,37.5,127.0,summer",
+    ], header=SEASON_HEADER)
+    with pytest.raises(SystemExit) as e:
+        load_universities(path)
+    assert "summer" in str(e.value)
+
+
+def test_season_absent_column_is_none(tmp_path):
+    # 기존 시드 4개 파일에는 season 컬럼이 없다. 그대로 읽혀야 한다.
+    path = _seed(tmp_path, ["연세대학교,신촌캠퍼스,서울 서대문구,2026,,37.5,126.9"])
+    assert load_universities(path)[0].season is None

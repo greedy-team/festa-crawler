@@ -12,6 +12,9 @@ from extract import ExtractError, date_warning, extract, verify
 from fetch import fetch_body
 
 
+SEASONS = ("spring", "fall")
+
+
 @dataclass
 class UniversityRow:
     university: str
@@ -21,11 +24,13 @@ class UniversityRow:
     url: str | None
     latitude: str
     longitude: str
+    season: str | None = None
 
 
 def load_universities(path: Path) -> list[UniversityRow]:
     rows: list[UniversityRow] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str, str | None]] = set()
+    declared: dict[str, bool] = {}
     with open(path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         missing = [c for c in ("latitude", "longitude")
@@ -40,21 +45,32 @@ def load_universities(path: Path) -> list[UniversityRow]:
             )
         for r in reader:
             university = r["university"].strip()
-            if university in seen:
-                # 캐시가 대학 이름으로만 갈린다 (raw/{university}.json,
-                # discovered/{university}.json). 두 캠퍼스가 탐색 후보 캐시를 공유하고
-                # verify()는 캠퍼스를 구분하지 못해 같은 축제가 두 키로 두 번 나간다.
+            season = (r.get("season") or "").strip() or None
+            if season is not None and season not in SEASONS:
                 raise SystemExit(
-                    f"{path} 에 '{university}' 행이 둘 이상입니다 — 캐시가 대학 이름으로만\n"
-                    "갈려 두 캠퍼스가 같은 수집 결과를 받습니다. 다캠퍼스 지원은 캐시 키를\n"
-                    "캠퍼스 단위로 바꾸는 작업이 선행되어야 합니다."
+                    f"{path} 의 '{university}' 행에 알 수 없는 season 값 {season!r} 이 있습니다.\n"
+                    f"쓸 수 있는 값은 {', '.join(SEASONS)} 입니다."
                 )
-            seen.add(university)
+            campus = r["campus"].strip()
+            if university in declared and declared[university] != (season is not None):
+                # 선언하지 않은 행은 계절 제약이 없어 다른 계절의 글까지 가져간다.
+                raise SystemExit(
+                    f"{path} 의 '{university}' 행 일부만 season 을 선언했습니다.\n"
+                    "한 대학의 행 중 하나라도 선언하면 그 대학의 모든 행이 선언해야 합니다."
+                )
+            declared[university] = season is not None
+            key = (university, campus, season)
+            if key in seen:
+                raise SystemExit(
+                    f"{path} 에 '{university}' / '{campus}' / season={season} 행이 둘 이상입니다.\n"
+                    "대학·캠퍼스·계절이 같은 행은 같은 축제를 가리킵니다."
+                )
+            seen.add(key)
             url = (r.get("url") or "").strip()
             rows.append(
                 UniversityRow(
                     university=university,
-                    campus=r["campus"].strip(),
+                    campus=campus,
                     region=r["region"].strip(),
                     year=int(r["year"]),
                     url=url or None,
@@ -62,6 +78,7 @@ def load_universities(path: Path) -> list[UniversityRow]:
                     # 검증은 백엔드 임포트 한 곳이다 (같은 규칙을 두 곳에 적지 않는다).
                     latitude=(r.get("latitude") or "").strip(),
                     longitude=(r.get("longitude") or "").strip(),
+                    season=season,
                 )
             )
     return rows
