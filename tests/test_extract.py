@@ -211,3 +211,32 @@ def test_prompt_excludes_student_stages_and_hosts_from_lineup():
     prompt = _prompt()
     assert "학생 무대" in prompt
     assert "MC" in prompt
+
+
+def test_season_match_accepts_month_in_range():
+    assert extract.season_match("2026-05-21", "spring") is True
+    assert extract.season_match("2026-09-16", "fall") is True
+    assert extract.season_match("2026-10-02", "fall") is True     # 10월 축제가 실재한다
+
+
+def test_season_match_rejects_month_out_of_range():
+    assert extract.season_match("2026-05-21", "fall") is False
+    assert extract.season_match("2026-09-16", "spring") is False
+
+
+def test_season_match_passes_when_unknown():
+    # 날짜가 없으면 판정하지 않는다 (DEC-0138). season 이 없으면 제약 자체가 없다.
+    assert extract.season_match(None, "fall") is True
+    assert extract.season_match("2026-05-21", None) is True
+    assert extract.season_match("날짜 아님", "fall") is True
+
+
+def test_verify_rejects_spring_article_for_fall_row():
+    result = _result(start_date="2026-05-21")
+    assert verify(result, "연세대학교", 2026, season="fall") is False
+    assert verify(result, "연세대학교", 2026, season="spring") is True
+
+
+def test_verify_without_season_is_unchanged():
+    result = _result(start_date="2026-05-21")
+    assert verify(result, "연세대학교", 2026) is True

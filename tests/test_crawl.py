@@ -365,7 +365,7 @@ def test_process_row_falls_through_to_second_candidate(tmp_path, monkeypatch):
     # 첫 후보는 verify 실패(다른 대학), 두 번째는 통과
     seen = []
 
-    def fake_verify(result, university, year):
+    def fake_verify(result, university, year, season=None):
         seen.append(university)
         return len(seen) > 1
 
@@ -646,7 +646,7 @@ def test_process_row_falls_back_when_sitemap_candidates_all_fail(tmp_path, monke
 
     seen = []
 
-    def fake_verify(result, university, year):
+    def fake_verify(result, university, year, season=None):
         seen.append(university)
         return len(seen) > 1          # 첫 후보(사이트맵)는 탈락, 두 번째(검색)는 통과
 

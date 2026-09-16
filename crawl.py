@@ -140,7 +140,9 @@ def _attempt_url(url: str, row: UniversityRow) -> dict:
         attempt["flag"] = "extract_failed"
         return attempt
     attempt["extraction"] = result.model_dump()
-    attempt["flag"] = "ok" if verify(result, row.university, row.year) else "mismatch"
+    attempt["flag"] = (
+        "ok" if verify(result, row.university, row.year, row.season) else "mismatch"
+    )
     return attempt
 
 
