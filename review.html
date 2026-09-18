@@ -20,6 +20,7 @@
   #list li.sel { background: #eef4ff; }
   #list li.bad .flag { color: #c00; font-weight: 700; }
   #list li .flag { font-size: 11px; color: #999; margin-right: 6px; }
+  #list li .when { font-size: 11px; color: #888; margin-left: 6px; }
   #detail { flex: 1; overflow: auto; padding: 12px 16px; }
   table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
   th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #eee;
@@ -82,13 +83,19 @@ function visible() {
   return data.festivals.filter((r) => r.flag !== "OK");
 }
 
+// 한 대학이 봄·가을 두 행을 가지면 목록에 같은 이름이 두 번 나온다. 개최 월이 그 둘을 가른다.
+function monthLabel(f) {
+  const m = /^\d{4}-(\d{2})-/.exec(f.start_date || "");
+  return m ? `${Number(m[1])}월` : "월 미상";
+}
+
 function render() {
   if (filter === "artists") return renderArtists();
   const rows = visible();
   if (selected >= rows.length) selected = Math.max(0, rows.length - 1);
   $("list").innerHTML = rows.map((r, i) => `
     <li class="${i === selected ? "sel" : ""} ${r.flag === "OK" ? "" : "bad"}" data-i="${i}">
-      <span class="flag">${esc(r.flag)}</span>${esc(r.host_name)}
+      <span class="flag">${esc(r.flag)}</span>${esc(r.host_name)}<span class="when">${esc(monthLabel(r))}</span>
     </li>`).join("");
   renderDetail(rows[selected]);
 }
