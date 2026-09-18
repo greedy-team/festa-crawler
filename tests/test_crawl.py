@@ -927,3 +927,59 @@ def test_process_row_writes_season_scoped_cache(tmp_path, monkeypatch):
     process_row(_row(season="spring"), tmp_path)
     assert (tmp_path / "raw" / "연세대학교-spring.json").exists()
     assert not (tmp_path / "raw" / "연세대학교.json").exists()
+
+
+def _ok_record(ext):
+    return {"university": "연세대학교", "campus": "신촌캠퍼스",
+            "region": "서울 서대문구", "year": 2026,
+            "latitude": "37.5665", "longitude": "126.9780",
+            "url": "https://example.com/post", "flag": "ok", "discovery": "manual",
+            "poster_image_url": None, "extraction": ext.model_dump()}
+
+
+def test_lineup_splits_joint_stage_into_rows():
+    # 합동 무대를 본문이 한 줄로 적으면 추출도 한 행으로 준다. 라인업 행은 아티스트 1명 단위다.
+    ext = _extraction().model_copy(update={"lineup": [
+        LineupItem(artist_raw="DJ POY & LOKI", day=1),
+    ]})
+    lrows = build_lineup_rows(_ok_record(ext), {})
+    assert [r["artist_raw"] for r in lrows] == ["DJ POY", "LOKI"]
+    assert [r["order"] for r in lrows] == [1, 2]
+
+
+def test_lineup_split_keeps_order_running_within_day():
+    ext = _extraction().model_copy(update={"lineup": [
+        LineupItem(artist_raw="그레이 & 로꼬", day=1),
+        LineupItem(artist_raw="잔나비", day=1),
+    ]})
+    lrows = build_lineup_rows(_ok_record(ext), {})
+    assert [(r["artist_raw"], r["order"]) for r in lrows] == [
+        ("그레이", 1), ("로꼬", 2), ("잔나비", 3)]
+
+
+def test_lineup_does_not_split_member_or_english_notation():
+    # 갈라서는 안 되는 표기 — 팀 이름에 멤버가 붙은 경우와 영문 병기.
+    ext = _extraction().model_copy(update={"lineup": [
+        LineupItem(artist_raw="빵송국(곽범, 이창호, 이선민)", day=1),
+        LineupItem(artist_raw="카더가든(Car, the Garden)", day=1),
+    ]})
+    lrows = build_lineup_rows(_ok_record(ext), {})
+    assert [r["artist_raw"] for r in lrows] == [
+        "빵송국(곽범, 이창호, 이선민)", "카더가든(Car, the Garden)"]
+
+
+def test_lineup_split_applies_mapping_per_artist():
+    ext = _extraction().model_copy(update={"lineup": [
+        LineupItem(artist_raw="십센치 & 잔나비", day=1),
+    ]})
+    lrows = build_lineup_rows(_ok_record(ext), {"십센치": "10CM"})
+    assert [r["artist_canonical"] for r in lrows] == ["10CM", "잔나비"]
+
+
+def test_secret_guest_is_not_split():
+    ext = _extraction().model_copy(update={"lineup": [
+        LineupItem(artist_raw="시크릿 게스트 & 특별 출연", day=1, is_secret=True),
+    ]})
+    lrows = build_lineup_rows(_ok_record(ext), {})
+    assert len(lrows) == 1
+    assert lrows[0]["artist_raw"] == "" and lrows[0]["revealed"] == "false"
