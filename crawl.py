@@ -280,6 +280,19 @@ def build_festival_row(record: dict) -> dict:
     }
 
 
+JOINT_SEPARATOR = " & "
+
+
+def split_artists(raw: str) -> list[str]:
+    """합동 무대 한 줄을 아티스트별로 나눈다. 라인업 행은 아티스트 1명 단위다.
+
+    구분자는 앞뒤 공백이 있는 ' & ' 하나뿐이다 — 괄호 안 멤버 표기('빵송국(곽범, 이창호)')나
+    영문 병기('카더가든(Car, the Garden)')를 건드리지 않기 위해서다. 쉼표는 쓰지 않는다.
+    """
+    names = [part.strip() for part in raw.split(JOINT_SEPARATOR) if part.strip()]
+    return names or [raw]
+
+
 def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
     """라인업 행을 만든다. artist_canonical은 매핑에서 채운다 — 매핑에 없으면 원문 그대로.
 
@@ -295,17 +308,19 @@ def build_lineup_rows(record: dict, mapping: dict[str, str]) -> list[dict]:
     rows = []
     for item in ext["lineup"]:
         day = item.get("day")
-        order_by_day[day] = order_by_day.get(day, 0) + 1
         secret = bool(item.get("is_secret"))
-        raw = "" if secret else item["artist_raw"]
-        rows.append({
-            "import_key": key,
-            "day": "" if day is None else day,
-            "order": order_by_day[day],
-            "artist_raw": raw,
-            "artist_canonical": "" if secret else mapping.get(raw, raw),
-            "revealed": "false" if secret else "true",
-        })
+        # 시크릿 게스트는 이름이 빈 값이라 나눌 것이 없다.
+        names = [""] if secret else split_artists(item["artist_raw"])
+        for raw in names:
+            order_by_day[day] = order_by_day.get(day, 0) + 1
+            rows.append({
+                "import_key": key,
+                "day": "" if day is None else day,
+                "order": order_by_day[day],
+                "artist_raw": raw,
+                "artist_canonical": "" if secret else mapping.get(raw, raw),
+                "revealed": "false" if secret else "true",
+            })
     return rows
 
 
